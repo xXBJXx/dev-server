@@ -1,9 +1,6 @@
-import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import { Socket } from 'node:net';
 import path from 'node:path';
-import { promisify } from 'node:util';
 import { satisfies } from 'semver';
 import type { DevServer } from '../DevServer.js';
 import {
@@ -13,11 +10,13 @@ import {
     STATES_DB_PORT_OFFSET,
 } from './CommandBase.js';
 import { getNestedFrontendDirectories, getNestedFrontendWatchCommand } from './frontendWatch.js';
+import { getWindowsPortOwners, isPortListening } from './portDiagnostics.js';
 import { readJson } from './utils.js';
 
-const execFileAsync = promisify(execFile);
 const CONTROLLER_DEBUGGER_PORT = 9228;
 const ADAPTER_DEBUGGER_PORT = 9229;
+
+export { parseWindowsListeningPorts } from './portDiagnostics.js';
 
 export type DiagnosticStatus = 'ok' | 'warning' | 'error';
 
@@ -25,54 +24,6 @@ export interface DiagnosticResult {
     check: string;
     status: DiagnosticStatus;
     detail: string;
-}
-
-export function parseWindowsListeningPorts(output: string): Map<number, Set<number>> {
-    const result = new Map<number, Set<number>>();
-    for (const line of output.split(/\r?\n/)) {
-        // A TCP listener has an unspecified remote endpoint ending in port 0.
-        // Matching this instead of the state keeps parsing independent of the
-        // localized netstat output (LISTENING, ABHÖREN, etc.).
-        const match = line.match(/^\s*TCP\s+\S+:(\d+)\s+\S+:0\s+\S+\s+(\d+)\s*$/i);
-        if (!match) {
-            continue;
-        }
-
-        const port = parseInt(match[1]);
-        const pid = parseInt(match[2]);
-        const pids = result.get(port) ?? new Set<number>();
-        pids.add(pid);
-        result.set(port, pids);
-    }
-    return result;
-}
-
-async function getWindowsPortOwners(): Promise<Map<number, Set<number>>> {
-    if (process.platform !== 'win32') {
-        return new Map();
-    }
-
-    try {
-        const { stdout } = await execFileAsync('netstat.exe', ['-ano', '-p', 'tcp'], { windowsHide: true });
-        return parseWindowsListeningPorts(stdout);
-    } catch {
-        return new Map();
-    }
-}
-
-function isPortListening(port: number): Promise<boolean> {
-    return new Promise(resolve => {
-        const socket = new Socket();
-        const finish = (listening: boolean): void => {
-            socket.destroy();
-            resolve(listening);
-        };
-        socket.setTimeout(300);
-        socket.once('connect', () => finish(true));
-        socket.once('error', () => finish(false));
-        socket.once('timeout', () => finish(false));
-        socket.connect(port, '127.0.0.1');
-    });
 }
 
 export class Doctor {

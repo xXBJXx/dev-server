@@ -1,8 +1,8 @@
 import chalk from 'chalk';
 import path from 'node:path';
-import { IOBROKER_CLI, IOBROKER_CONTROLLER } from './CommandBase.js';
+import { HIDDEN_BROWSER_SYNC_PORT_OFFSET, IOBROKER_CLI, IOBROKER_CONTROLLER } from './CommandBase.js';
 import { RemoteConnection } from './RemoteConnection.js';
-import { ADAPTER_DEBUGGER_PORT, RunCommandBase } from './RunCommandBase.js';
+import { ADAPTER_DEBUGGER_PORT, CONTROLLER_DEBUGGER_PORT, RunCommandBase } from './RunCommandBase.js';
 export class Debug extends RunCommandBase {
     wait;
     noInstall;
@@ -16,6 +16,17 @@ export class Debug extends RunCommandBase {
         if (this.profileDir instanceof RemoteConnection) {
             await this.profileDir.tunnelPort(ADAPTER_DEBUGGER_PORT);
         }
+    }
+    getStartupPorts() {
+        const ports = super
+            .getStartupPorts()
+            .filter(definition => definition.port !== CONTROLLER_DEBUGGER_PORT || !this.isJSController());
+        ports.push({ name: 'BrowserSync', port: this.getPort(HIDDEN_BROWSER_SYNC_PORT_OFFSET) });
+        ports.push({
+            name: this.isJSController() ? 'Controller debugger' : 'Adapter debugger',
+            port: ADAPTER_DEBUGGER_PORT,
+        });
+        return ports;
     }
     async doRun() {
         if (!this.noInstall) {

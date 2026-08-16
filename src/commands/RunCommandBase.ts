@@ -28,9 +28,10 @@ import {
     getNestedFrontendWatchCommand,
     type FrontendWatchCommand,
 } from './frontendWatch.js';
+import { findPortConflicts, formatPortConflict, type PortDefinition } from './portDiagnostics.js';
 import { checkPort, delay, readJson } from './utils.js';
 
-const CONTROLLER_DEBUGGER_PORT = 9228;
+export const CONTROLLER_DEBUGGER_PORT = 9228;
 
 export const ADAPTER_DEBUGGER_PORT = 9229;
 
@@ -42,11 +43,12 @@ export abstract class RunCommandBase extends CommandBase {
     private readonly browserSyncInstances: browserSync.BrowserSyncInstance[] = [];
     private isExiting = false;
     private exitPromise?: Promise<never>;
-    private sigintHandler?: () => void;
+    private readonly shutdownHandlers = new Map<NodeJS.Signals, () => void>();
 
     protected readonly socketEvents = new EventEmitter();
 
     protected override async prepare(): Promise<void> {
+        await this.assertStartupPortsAvailable();
         await super.prepare();
         if (this.profileDir instanceof RemoteConnection) {
             await this.profileDir.tunnelPort(this.getPort(HIDDEN_ADMIN_PORT_OFFSET));
@@ -78,10 +80,10 @@ export abstract class RunCommandBase extends CommandBase {
     }
 
     private async performExit(exitCode: number, signal: string): Promise<never> {
-        if (this.sigintHandler) {
-            process.off('SIGINT', this.sigintHandler);
-            this.sigintHandler = undefined;
+        for (const [registeredSignal, handler] of this.shutdownHandlers) {
+            process.off(registeredSignal, handler);
         }
+        this.shutdownHandlers.clear();
         if (this.websocketReconnectTimer) {
             clearTimeout(this.websocketReconnectTimer);
             this.websocketReconnectTimer = undefined;
@@ -95,6 +97,29 @@ export abstract class RunCommandBase extends CommandBase {
         this.webServer = undefined;
         await this.stopRuntime();
         return super.exit(exitCode, signal);
+    }
+
+    protected getStartupPorts(): PortDefinition[] {
+        return [
+            { name: 'Admin proxy', port: this.config.adminPort },
+            { name: 'Admin internal', port: this.getPort(HIDDEN_ADMIN_PORT_OFFSET) },
+            { name: 'States DB', port: this.getPort(STATES_DB_PORT_OFFSET) },
+            { name: 'Objects DB', port: this.getPort(OBJECTS_DB_PORT_OFFSET) },
+            { name: 'Controller debugger', port: CONTROLLER_DEBUGGER_PORT },
+        ];
+    }
+
+    private async assertStartupPortsAvailable(): Promise<void> {
+        const conflicts = await findPortConflicts(this.getStartupPorts());
+        if (!conflicts.length) {
+            return;
+        }
+
+        throw new Error(
+            `Cannot start dev-server profile "${this.owner.profileName}" because required ports are already in use: ` +
+                `${conflicts.map(formatPortConflict).join(', ')}. Stop the conflicting process or configure a different ` +
+                `profile/admin port. Run "dev-server doctor ${this.owner.profileName}" for full diagnostics.`,
+        );
     }
 
     protected async startJsController(): Promise<void> {
@@ -182,11 +207,14 @@ export abstract class RunCommandBase extends CommandBase {
         const server = app.listen(this.config.adminPort, '127.0.0.1');
         this.webServer = server;
 
-        this.sigintHandler = (): void => {
-            this.log.notice('dev-server is exiting...');
-            void this.exit(0);
-        };
-        process.once('SIGINT', this.sigintHandler);
+        for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+            const handler = (): void => {
+                this.log.notice(`dev-server received ${signal} and is exiting...`);
+                void this.exit(0, signal);
+            };
+            this.shutdownHandlers.set(signal, handler);
+            process.once(signal, handler);
+        }
 
         await new Promise<void>((resolve, reject) => {
             server.on('listening', resolve);

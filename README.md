@@ -301,6 +301,8 @@ Diagnose the development environment without starting ioBroker or the adapter. T
 
 On Windows, occupied ports include the owning process ID when it can be determined.
 
+The `run`, `watch` and `debug` commands perform the same port checks before building, installing or starting child processes. Port conflicts therefore fail immediately with the affected service, port and—on Windows—the owning process ID. Both `Ctrl+C` (`SIGINT`) and IDE/process-manager termination (`SIGTERM`) use the managed shutdown path.
+
 Use `--json` to produce machine-readable output for scripts and IDE integrations:
 
 ```shell

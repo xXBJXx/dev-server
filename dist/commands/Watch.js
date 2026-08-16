@@ -6,7 +6,7 @@ import { readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import nodemon from 'nodemon';
 import { ADAPTER_DEBUGGER_PORT, RunCommandBase } from './RunCommandBase.js';
-import { OBJECTS_DB_PORT_OFFSET } from './CommandBase.js';
+import { HIDDEN_BROWSER_SYNC_PORT_OFFSET, OBJECTS_DB_PORT_OFFSET } from './CommandBase.js';
 import { terminateProcessTreeGracefully } from './processTree.js';
 import { RemoteConnection } from './RemoteConnection.js';
 import { checkPort, delay } from './utils.js';
@@ -26,6 +26,16 @@ export class Watch extends RunCommandBase {
         this.noInstall = noInstall;
         this.doNotWatch = doNotWatch;
         this.useBrowserSync = useBrowserSync;
+    }
+    getStartupPorts() {
+        const ports = super.getStartupPorts();
+        if (this.useBrowserSync) {
+            ports.push({ name: 'BrowserSync', port: this.getPort(HIDDEN_BROWSER_SYNC_PORT_OFFSET) });
+        }
+        if (this.startAdapter) {
+            ports.push({ name: 'Adapter debugger', port: ADAPTER_DEBUGGER_PORT });
+        }
+        return ports;
     }
     async doRun() {
         if (!this.noInstall) {
