@@ -10,7 +10,7 @@ This is `@iobroker/dev-server`, a command-line development tool for ioBroker ada
 - **Primary function**: Local development server for ioBroker adapters
 - **Target users**: ioBroker adapter developers
 - **Environment**: Cross-platform CLI tool (Windows, Linux, macOS)
-- **Runtime**: Node.js 16+ required
+- **Runtime**: Node.js `>=20.19.0 <22.0.0 || >=22.13.0` required
 
 ### Core Functionality
 - Sets up isolated ioBroker instances for development

@@ -7,6 +7,7 @@
 
 ## **WORK IN PROGRESS**
 
+- Align the documented Node.js requirement with the package engines
 - Run npm and npx integration-test commands on Windows without relying on shell execution
 - Keep TLS certificate verification enabled while creating integration-test adapters
 - Reject unknown commands and command options instead of silently ignoring them

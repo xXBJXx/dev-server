@@ -6,7 +6,7 @@
 ioBroker dev-server is a simple command line tool running on Windows, Linux and macOS that allows you to quickly develop and test ioBroker adapters and their admin interface.
 
 > [!NOTE]
-> dev-server requires at least Node.js 14.
+> dev-server requires Node.js `>=20.19.0 <22.0.0 || >=22.13.0`.
 
 ## Installation
 
@@ -74,7 +74,7 @@ Under Linux, it is sometimes useful to install this tool as global, BUT best pra
 - Under Windows, a global installation is no problem.
 
 > [!NOTE]
-> dev-server requires at least Node.js 14.
+> dev-server requires Node.js `>=20.19.0 <22.0.0 || >=22.13.0`.
 
 How to install it globally:
 
