@@ -7,6 +7,7 @@ import {
     createAdminSocketMessage,
     parseAdminSocketMessage,
 } from '../dist/commands/adminSocketProtocol.js';
+import { getNestedFrontendWatchCommand } from '../dist/commands/frontendWatch.js';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -37,5 +38,23 @@ describe('dev-server runtime regressions', () => {
     it('keeps the executable shebang in the built CLI', async () => {
         const cli = await readFile(path.resolve(testDir, '..', 'dist', 'index.js'), 'utf8');
         assert.match(cli, /^#!\/usr\/bin\/env node\r?\n/);
+    });
+
+    it('starts a nested frontend watch script when one is provided', () => {
+        assert.deepStrictEqual(getNestedFrontendWatchCommand('src-admin', { scripts: { watch: 'vite build --watch' } }), {
+            directory: 'src-admin',
+            args: ['--prefix', 'src-admin', 'run', 'watch'],
+        });
+    });
+
+    it('adds Vite watch mode to nested frontend build scripts', () => {
+        assert.deepStrictEqual(getNestedFrontendWatchCommand('src-admin', { scripts: { build: 'vite build' } }), {
+            directory: 'src-admin',
+            args: ['--prefix', 'src-admin', 'run', 'build', '--', '--watch'],
+        });
+    });
+
+    it('does not turn arbitrary nested builds into persistent watchers', () => {
+        assert.equal(getNestedFrontendWatchCommand('src-admin', { scripts: { build: 'webpack' } }), undefined);
     });
 });

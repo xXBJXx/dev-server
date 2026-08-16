@@ -23,6 +23,11 @@ import {
 } from './CommandBase.js';
 import { RemoteConnection } from './RemoteConnection.js';
 import { createAdminSocketMessage, parseAdminSocketMessage } from './adminSocketProtocol.js';
+import {
+    getNestedFrontendDirectories,
+    getNestedFrontendWatchCommand,
+    type FrontendWatchCommand,
+} from './frontendWatch.js';
 import { checkPort, delay, readJson } from './utils.js';
 
 const CONTROLLER_DEBUGGER_PORT = 9228;
@@ -559,23 +564,44 @@ export abstract class RunCommandBase extends CommandBase {
             return false;
         }
 
-        let hasReact = false;
         if (scripts['watch:react']) {
-            await this.startReact('watch:react');
-            hasReact = true;
+            await this.startFrontendWatch({ directory: '.', args: ['run', 'watch:react'] });
 
             if (existsSync(path.resolve(this.rootPath, 'admin/.watch'))) {
                 // rewrite the build directory to the .watch directory,
                 // because "watch:react" no longer updates the build directory automatically
                 pathRewrite[`^/adapter/${this.adapterName}/build/`] = '/.watch/';
             }
+            return true;
         } else if (scripts['watch:parcel']) {
             // use React with legacy script name
-            await this.startReact('watch:parcel');
-            hasReact = true;
+            await this.startFrontendWatch({ directory: '.', args: ['run', 'watch:parcel'] });
+            return true;
         }
 
-        return hasReact;
+        const nestedWatchCommands: FrontendWatchCommand[] = [];
+        for (const directory of getNestedFrontendDirectories()) {
+            const packagePath = path.resolve(this.rootPath, directory, 'package.json');
+            if (!existsSync(packagePath)) {
+                continue;
+            }
+
+            try {
+                const packageJson = await readJson(packagePath);
+                const command = getNestedFrontendWatchCommand(directory, packageJson);
+                if (command) {
+                    nestedWatchCommands.push(command);
+                }
+            } catch (error) {
+                this.log.warn(`Could not inspect ${directory}/package.json: ${error as Error}`);
+            }
+        }
+
+        for (const command of nestedWatchCommands) {
+            await this.startFrontendWatch(command);
+        }
+
+        return nestedWatchCommands.length > 0;
     }
 
     private startBrowserSync(port: number, hasReact: boolean): browserSync.BrowserSyncInstance {
@@ -621,10 +647,14 @@ export abstract class RunCommandBase extends CommandBase {
         });
     }
 
-    private async startReact(scriptName: string): Promise<void> {
-        this.log.notice('Starting React build');
-        this.log.debug('Waiting for first successful React build...');
-        await this.rootDir.spawnNpmAndAwaitOutput(['run', scriptName], /(built in|done in|watching (files )?for)/i);
+    private async startFrontendWatch(command: FrontendWatchCommand): Promise<void> {
+        const location = command.directory === '.' ? '' : ` (${command.directory})`;
+        this.log.notice(`Starting frontend build watcher${location}`);
+        this.log.debug(`Waiting for first successful frontend build${location}...`);
+        await this.rootDir.spawnNpmAndAwaitOutput(
+            command.args,
+            /(built in|done in|watching (files )?for|waiting for file changes)/i,
+        );
     }
 
     /**

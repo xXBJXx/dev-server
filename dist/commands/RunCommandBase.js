@@ -15,6 +15,7 @@ import { injectCode } from '../jsonConfig.js';
 import { CommandBase, HIDDEN_ADMIN_PORT_OFFSET, HIDDEN_BROWSER_SYNC_PORT_OFFSET, IOBROKER_CONTROLLER, OBJECTS_DB_PORT_OFFSET, STATES_DB_PORT_OFFSET, } from './CommandBase.js';
 import { RemoteConnection } from './RemoteConnection.js';
 import { createAdminSocketMessage, parseAdminSocketMessage } from './adminSocketProtocol.js';
+import { getNestedFrontendDirectories, getNestedFrontendWatchCommand, } from './frontendWatch.js';
 import { checkPort, delay, readJson } from './utils.js';
 const CONTROLLER_DEBUGGER_PORT = 9228;
 export const ADAPTER_DEBUGGER_PORT = 9229;
@@ -462,22 +463,41 @@ export class RunCommandBase extends CommandBase {
         if (!scripts) {
             return false;
         }
-        let hasReact = false;
         if (scripts['watch:react']) {
-            await this.startReact('watch:react');
-            hasReact = true;
+            await this.startFrontendWatch({ directory: '.', args: ['run', 'watch:react'] });
             if (existsSync(path.resolve(this.rootPath, 'admin/.watch'))) {
                 // rewrite the build directory to the .watch directory,
                 // because "watch:react" no longer updates the build directory automatically
                 pathRewrite[`^/adapter/${this.adapterName}/build/`] = '/.watch/';
             }
+            return true;
         }
         else if (scripts['watch:parcel']) {
             // use React with legacy script name
-            await this.startReact('watch:parcel');
-            hasReact = true;
+            await this.startFrontendWatch({ directory: '.', args: ['run', 'watch:parcel'] });
+            return true;
         }
-        return hasReact;
+        const nestedWatchCommands = [];
+        for (const directory of getNestedFrontendDirectories()) {
+            const packagePath = path.resolve(this.rootPath, directory, 'package.json');
+            if (!existsSync(packagePath)) {
+                continue;
+            }
+            try {
+                const packageJson = await readJson(packagePath);
+                const command = getNestedFrontendWatchCommand(directory, packageJson);
+                if (command) {
+                    nestedWatchCommands.push(command);
+                }
+            }
+            catch (error) {
+                this.log.warn(`Could not inspect ${directory}/package.json: ${error}`);
+            }
+        }
+        for (const command of nestedWatchCommands) {
+            await this.startFrontendWatch(command);
+        }
+        return nestedWatchCommands.length > 0;
     }
     startBrowserSync(port, hasReact) {
         this.log.notice('Starting browser-sync');
@@ -514,10 +534,11 @@ export class RunCommandBase extends CommandBase {
             }
         });
     }
-    async startReact(scriptName) {
-        this.log.notice('Starting React build');
-        this.log.debug('Waiting for first successful React build...');
-        await this.rootDir.spawnNpmAndAwaitOutput(['run', scriptName], /(built in|done in|watching (files )?for)/i);
+    async startFrontendWatch(command) {
+        const location = command.directory === '.' ? '' : ` (${command.directory})`;
+        this.log.notice(`Starting frontend build watcher${location}`);
+        this.log.debug(`Waiting for first successful frontend build${location}...`);
+        await this.rootDir.spawnNpmAndAwaitOutput(command.args, /(built in|done in|watching (files )?for|waiting for file changes)/i);
     }
     /**
      * Patch an existing sourcemap file.
