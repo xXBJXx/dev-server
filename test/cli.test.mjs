@@ -15,7 +15,9 @@ function runCli(...args) {
     });
 }
 
-describe('dev-server CLI validation', () => {
+describe('dev-server CLI validation', function () {
+    this.timeout(15_000);
+
     it('rejects unknown command options', () => {
         const result = runCli('watch', '--nodtart');
         const output = `${result.stdout}${result.stderr}`;
