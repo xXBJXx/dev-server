@@ -216,6 +216,8 @@ The following options are available:
 
 `--admin <version>` Define which version of admin to be used (default: "latest").
 
+`--dryRun` Print the complete setup plan without creating or deleting profiles, editing ignore files, installing packages, restoring backups or opening remote connections.
+
 `--remote` Set up dev-server on a remote host using SSH. You will be prompted for connection details.
 
 `--backupFile <filename>` Provide an ioBroker backup file to restore in this dev-server. Use this option to populate the dev-server with data (and possibly other adapters).

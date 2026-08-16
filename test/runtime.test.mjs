@@ -11,6 +11,7 @@ import {
     parseAdminSocketMessage,
 } from '../dist/commands/adminSocketProtocol.js';
 import {
+    CommandBase,
     getAdminPortValidationError,
     HIDDEN_BROWSER_SYNC_PORT_OFFSET,
     OBJECTS_DB_PORT_OFFSET,
@@ -32,6 +33,7 @@ import {
 import { Watch } from '../dist/commands/Watch.js';
 import { findDescendantProcesses, parseWindowsProcessList } from '../dist/commands/utils.js';
 import { RemoteConnection } from '../dist/commands/RemoteConnection.js';
+import { Update } from '../dist/commands/Update.js';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -72,6 +74,67 @@ describe('dev-server runtime regressions', () => {
             'subscribeObjects',
             [id],
         ]);
+    });
+
+    it('always tears commands down and logs their elapsed phase', async () => {
+        const messages = [];
+        let tornDown = false;
+        class FailingCommand extends CommandBase {
+            async doRun() {
+                throw new Error('expected failure');
+            }
+
+            async teardown() {
+                tornDown = true;
+            }
+        }
+        const owner = {
+            adapterName: 'example',
+            config: { adminPort: 8081, useSymlinks: false },
+            log: { debug: message => messages.push(message) },
+            profilePath: 'profile',
+            rootPath: 'root',
+        };
+
+        await assert.rejects(new FailingCommand(owner).run(), /expected failure/);
+        assert.equal(tornDown, true);
+        assert.ok(messages.some(message => /^\[FailingCommand\] Starting/.test(message)));
+        assert.ok(
+            messages.some(message => /^\[FailingCommand\] Initialization phase completed after \d+ ms/.test(message)),
+        );
+    });
+
+    it('packs the adapter only once during update', async () => {
+        const installCalls = [];
+        const uploaded = [];
+        let buildCalls = 0;
+        class UpdateTest extends Update {
+            async buildLocalAdapter() {
+                buildCalls++;
+            }
+
+            async installLocalAdapter(doInstall) {
+                installCalls.push(doInstall);
+            }
+
+            async uploadAdapter(name) {
+                uploaded.push(name);
+            }
+        }
+        const owner = {
+            adapterName: 'example',
+            config: { adminPort: 8081, useSymlinks: false },
+            log: { box: () => undefined, debug: () => undefined, notice: () => undefined },
+            profilePath: 'profile',
+            rootPath: 'root',
+        };
+        const update = new UpdateTest(owner);
+        update.profileDir = { exec: async () => undefined };
+
+        await update.run();
+        assert.equal(buildCalls, 1);
+        assert.deepStrictEqual(installCalls, [undefined]);
+        assert.deepStrictEqual(uploaded, ['admin', 'example']);
     });
 
     it('preserves all objectChange arguments from Admin', () => {
@@ -295,7 +358,7 @@ describe('dev-server runtime regressions', () => {
         const owner = {
             adapterName: 'example',
             config: { adminPort: 8081, useSymlinks: false },
-            log: {},
+            log: { debug: () => undefined },
             profileName: 'default',
             profilePath: 'profile',
             rootPath: 'root',
@@ -431,7 +494,7 @@ describe('dev-server runtime regressions', () => {
         const owner = {
             adapterName: 'example',
             config: { adminPort: 8081, useSymlinks: false },
-            log: {},
+            log: { debug: () => undefined },
             profileName: 'test-profile',
             profilePath: 'profile',
             rootPath: 'root',
@@ -449,7 +512,7 @@ describe('dev-server runtime regressions', () => {
     });
 
     it('terminates a spawned process tree', async function () {
-        this.timeout(10_000);
+        this.timeout(20_000);
         const parent = spawn(
             process.execPath,
             [

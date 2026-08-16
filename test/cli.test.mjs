@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -68,6 +68,29 @@ describe('dev-server CLI validation', function () {
             assert.notStrictEqual(result.status, 0);
             assert.match(output, /Admin port must not exceed 47190/i);
             assert.equal(result.signal, null);
+        } finally {
+            rmSync(adapterDir, { recursive: true, force: true });
+        }
+    });
+
+    it('prints a remote setup dry-run without creating profile data or prompting', () => {
+        const adapterDir = mkdtempSync(path.join(tmpdir(), 'dev-server-setup-plan-'));
+        try {
+            writeFileSync(
+                path.join(adapterDir, 'package.json'),
+                JSON.stringify({ name: 'iobroker.plan-test', scripts: { build: 'echo build' } }),
+            );
+            writeFileSync(
+                path.join(adapterDir, 'io-package.json'),
+                JSON.stringify({ common: { name: 'plan-test' } }),
+            );
+
+            const result = runCli('setup', '--dryRun', '--remote', '--root', adapterDir);
+            const output = `${result.stdout}${result.stderr}`;
+            assert.equal(result.status, 0);
+            assert.match(output, /Dry-run setup plan/i);
+            assert.match(output, /Configure remote/i);
+            assert.equal(existsSync(path.join(adapterDir, '.dev-server')), false);
         } finally {
             rmSync(adapterDir, { recursive: true, force: true });
         }

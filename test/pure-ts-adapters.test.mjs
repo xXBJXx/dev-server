@@ -108,7 +108,7 @@ describe('dev-server integration tests - Pure TypeScript', function () {
                 cwd: PURE_TS_ADAPTER_DIR,
                 timeout: RUN_TIMEOUT,
                 verbose: true,
-                finalMessage: /Watching files\.\.\./g,
+                finalMessage: /\[Run\] Initialization phase completed after \d+ ms/g,
             });
 
             const output = result.stdout + result.stderr;

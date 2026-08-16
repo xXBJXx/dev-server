@@ -7,7 +7,6 @@ export class Update extends CommandBase {
         if (!this.config.useSymlinks) {
             this.log.notice('Building local adapter.');
             await this.buildLocalAdapter();
-            await this.installLocalAdapter(false); //do not install, keep .tgz file.
         }
 
         await this.profileDir.exec('npm update --loglevel error');

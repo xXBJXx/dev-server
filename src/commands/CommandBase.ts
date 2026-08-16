@@ -84,9 +84,16 @@ export abstract class CommandBase {
     }
 
     public async run(): Promise<void> {
-        await this.prepare();
-        await this.doRun();
-        await this.teardown();
+        const commandName = this.constructor.name;
+        const startedAt = Date.now();
+        this.log.debug(`[${commandName}] Starting`);
+        try {
+            await this.prepare();
+            await this.doRun();
+        } finally {
+            await this.teardown();
+            this.log.debug(`[${commandName}] Initialization phase completed after ${Date.now() - startedAt} ms`);
+        }
     }
 
     protected async prepare(): Promise<void> {

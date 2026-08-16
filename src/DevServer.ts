@@ -21,6 +21,7 @@ import { Upload } from './commands/Upload.js';
 import { readJson } from './commands/utils.js';
 import { Watch } from './commands/Watch.js';
 import { WatchRemote } from './commands/WatchRemote.js';
+import { createSetupPlan } from './commands/setupPlan.js';
 import { Logger } from './logger.js';
 
 const DEFAULT_TEMP_DIR_NAME = '.dev-server';
@@ -100,6 +101,12 @@ export class DevServer {
                         description:
                             'Use symlinks instead of packing and installing the current adapter for a smoother dev experience. Requires JS-Controller 5+.',
                     },
+                    dryRun: {
+                        type: 'boolean',
+                        default: false,
+                        description:
+                            'Show the setup actions without changing files, installing packages or connecting remotely',
+                    },
                 },
                 async args =>
                     await this.setup(
@@ -109,6 +116,7 @@ export class DevServer {
                         !!args.remote,
                         !!args.force,
                         args.symlinks,
+                        !!args.dryRun,
                     ),
             )
             .command(
@@ -232,7 +240,7 @@ export class DevServer {
             .recommendCommands()
             .demandCommand(1, 'You must specify a command.')
             .middleware(async argv => await this.setLogger(argv))
-            .middleware(async argv => await this.checkVersion(!!argv.json))
+            .middleware(async argv => await this.checkVersion(!!argv.json || !!argv.dryRun))
             .middleware(async argv => await this.setDirectories(argv))
             .middleware(async () => await this.parseConfig())
             .wrap(Math.min(100, parser.terminalWidth()))
@@ -286,6 +294,7 @@ export class DevServer {
         root: string;
         temp: string;
         profile?: string;
+        dryRun?: boolean;
     }): Promise<void> {
         this.rootPath = path.resolve(argv.root);
         this.tempPath = path.resolve(this.rootPath, argv.temp);
@@ -293,10 +302,16 @@ export class DevServer {
             // we are still in the old directory structure (no profiles), let's move it
             const intermediateDir = path.join(this.rootPath, `${DEFAULT_TEMP_DIR_NAME}-temp`);
             const defaultProfileDir = path.join(this.tempPath, DEFAULT_PROFILE_NAME);
-            this.log.debug(`Moving temporary data from ${this.tempPath} to ${defaultProfileDir}`);
-            await rename(this.tempPath, intermediateDir);
-            await mkdir(this.tempPath);
-            await rename(intermediateDir, defaultProfileDir);
+            if (argv.dryRun) {
+                this.log.notice(
+                    `Dry-run: legacy profile data would be migrated from ${this.tempPath} to ${defaultProfileDir}`,
+                );
+            } else {
+                this.log.debug(`Moving temporary data from ${this.tempPath} to ${defaultProfileDir}`);
+                await rename(this.tempPath, intermediateDir);
+                await mkdir(this.tempPath);
+                await rename(intermediateDir, defaultProfileDir);
+            }
         }
 
         let profileName = argv.profile;
@@ -386,10 +401,34 @@ export class DevServer {
         remote: boolean,
         force: boolean,
         useSymlinks: boolean,
+        dryRun = false,
     ): Promise<void> {
         const portError = getAdminPortValidationError(adminPort);
         if (portError) {
             throw new Error(portError);
+        }
+
+        if (dryRun) {
+            const pkg = await readJson<Record<string, any>>(path.join(this.rootPath, 'package.json'));
+            const plan = createSetupPlan({
+                adapterName: this.adapterName,
+                adminPort,
+                backupFile,
+                dependencies,
+                force,
+                hasBuildScript: !!pkg.scripts?.build,
+                profileName: this.profileName,
+                profilePath: this.profilePath,
+                remote,
+                setupExists: this.isSetUp(),
+                useSymlinks,
+            });
+            this.log.info(`Dry-run setup plan for profile "${this.profileName}" (no changes will be made):`);
+            this.log.table([
+                ['#', 'Action', 'Details'],
+                ...plan.map((step, index) => [String(index + 1), step.action, step.detail]),
+            ]);
+            return;
         }
 
         let setup: Setup;

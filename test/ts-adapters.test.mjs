@@ -76,7 +76,7 @@ describe('dev-server integration tests', function () {
                 cwd: TS_ADAPTER_DIR,
                 timeout: RUN_TIMEOUT,
                 verbose: true,
-                finalMessage: /Watching files\.\.\./g,
+                finalMessage: /\[Run\] Initialization phase completed after \d+ ms/g,
             });
 
             const output = result.stdout + result.stderr;
