@@ -13,6 +13,16 @@ function resolvePackageManagerCommand(command, args) {
     return { command: process.execPath, args: [cliPath, ...args] };
 }
 
+function terminateProcess(proc, signal) {
+    if (process.platform === 'win32' && proc.pid) {
+        const taskkill = spawn('taskkill', ['/pid', `${proc.pid}`, '/T', '/F'], { stdio: 'ignore' });
+        taskkill.once('error', () => proc.kill(signal));
+        return;
+    }
+
+    proc.kill(signal);
+}
+
 /**
  * Run a command and return promise
  */
@@ -69,7 +79,7 @@ export function runCommand(command, args, options = {}) {
         if (options.timeout) {
             timeoutId = setTimeout(() => {
                 if (rejectedOrResolved) return;
-                proc.kill('SIGKILL');
+                terminateProcess(proc, 'SIGKILL');
                 reject(new Error(`Command timed out after ${options.timeout}ms`));
                 rejectedOrResolved = true;
             }, options.timeout);
@@ -106,14 +116,14 @@ export function runCommandWithTimeout(command, args, options = {}) {
 
             console.log('Timeout reached, sending SIGINT...');
             killed = true;
-            proc.kill('SIGINT');
+            terminateProcess(proc, 'SIGINT');
 
             // Give it 3 seconds to gracefully exit, then force kill
             timeoutId = setTimeout(() => {
                 console.log('Checking if process has exited after SIGINT...');
                 if (!resolvedOrRejected && !closed) {
                     console.log('Force killing with SIGKILL...');
-                    proc.kill('SIGKILL');
+                    terminateProcess(proc, 'SIGKILL');
                 }
 
                 // Final fallback - resolve after another 2 seconds
