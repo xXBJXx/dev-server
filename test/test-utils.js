@@ -3,13 +3,24 @@ import path from 'node:path';
 import fs from 'node:fs';
 import assert from 'node:assert';
 
+function resolvePackageManagerCommand(command, args) {
+    if (process.platform !== 'win32' || !['npm', 'npx'].includes(command) || !process.env.npm_execpath) {
+        return { command, args };
+    }
+
+    const cliPath =
+        command === 'npm' ? process.env.npm_execpath : path.join(path.dirname(process.env.npm_execpath), 'npx-cli.js');
+    return { command: process.execPath, args: [cliPath, ...args] };
+}
+
 /**
  * Run a command and return promise
  */
 export function runCommand(command, args, options = {}) {
     return new Promise((resolve, reject) => {
         console.log(`Running: ${command} ${args.join(' ')}`);
-        const proc = spawn(command, args, {
+        const resolvedCommand = resolvePackageManagerCommand(command, args);
+        const proc = spawn(resolvedCommand.command, resolvedCommand.args, {
             stdio: ['pipe', 'pipe', 'pipe'],
             env: options.env || process.env,
             ...options,
