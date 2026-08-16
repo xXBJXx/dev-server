@@ -7,6 +7,7 @@
 
 ## **WORK IN PROGRESS**
 
+- Remove generated pure-TypeScript adapters after integration tests
 - Let TypeScript loaders manage source maps without appending invalid source-map comments
 - Clean up complete integration-test process trees on Windows
 - Align the documented Node.js requirement with the package engines

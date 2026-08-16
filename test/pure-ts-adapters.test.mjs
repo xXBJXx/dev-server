@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+    cleanupTestAdapter,
     runCommandWithFileChange,
     runCommandWithSignal,
     runDevServerSetupTest,
@@ -43,13 +44,7 @@ describe('dev-server integration tests - Pure TypeScript', function () {
     });
 
     after(() => {
-        // Clean up test adapters
-        console.log('Cleaning up pure TypeScript test adapter...');
-        try {
-            //fs.rmSync(PURE_TS_ADAPTER_DIR, { recursive: true, force: true });
-        } catch (error) {
-            console.warn('Error cleaning up pure TypeScript test adapter:', error.message);
-        }
+        cleanupTestAdapter('Pure TypeScript', PURE_TS_ADAPTER_DIR);
     });
 
     describe('Adapter Configuration', () => {
