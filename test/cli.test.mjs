@@ -54,6 +54,25 @@ describe('dev-server CLI validation', function () {
         assert.match(output, /doctor \[profile\]/i);
     });
 
+    it('rejects an Admin port whose derived internal ports would overflow', () => {
+        const adapterDir = mkdtempSync(path.join(tmpdir(), 'dev-server-port-validation-'));
+        try {
+            writeFileSync(path.join(adapterDir, 'package.json'), JSON.stringify({ name: 'iobroker.port-test' }));
+            writeFileSync(
+                path.join(adapterDir, 'io-package.json'),
+                JSON.stringify({ common: { name: 'port-test' } }),
+            );
+
+            const result = runCli('setup', '--adminPort', '50000', '--root', adapterDir);
+            const output = `${result.stdout}${result.stderr}`;
+            assert.notStrictEqual(result.status, 0);
+            assert.match(output, /Admin port must not exceed 47190/i);
+            assert.equal(result.signal, null);
+        } finally {
+            rmSync(adapterDir, { recursive: true, force: true });
+        }
+    });
+
     it('prints machine-readable doctor JSON without a log preamble', () => {
         const adapterDir = mkdtempSync(path.join(tmpdir(), 'dev-server-doctor-'));
         try {

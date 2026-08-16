@@ -16,6 +16,36 @@ export const HIDDEN_BROWSER_SYNC_PORT_OFFSET = 14345;
 export const STATES_DB_PORT_OFFSET = 16345;
 export const OBJECTS_DB_PORT_OFFSET = 18345;
 
+const MAX_TCP_PORT = 65535;
+const RESERVED_DEBUGGER_PORTS = new Set([9228, 9229]);
+
+/**
+ * Validate the public Admin port together with every internal port derived
+ * from it. This catches invalid profile files as well as bad setup arguments
+ * before any child process is started.
+ */
+export function getAdminPortValidationError(adminPort: number): string | undefined {
+    if (!Number.isInteger(adminPort)) {
+        return `Admin port must be an integer, received ${String(adminPort)}.`;
+    }
+    if (adminPort < 1) {
+        return `Admin port must be greater than 0, received ${adminPort}.`;
+    }
+
+    const maximumAdminPort = MAX_TCP_PORT - OBJECTS_DB_PORT_OFFSET;
+    if (adminPort > maximumAdminPort) {
+        return (
+            `Admin port must not exceed ${maximumAdminPort}; the objects DB port uses offset ` +
+            `${OBJECTS_DB_PORT_OFFSET} and would exceed TCP port ${MAX_TCP_PORT}.`
+        );
+    }
+    if (RESERVED_DEBUGGER_PORTS.has(adminPort)) {
+        return `Admin port ${adminPort} is reserved for a dev-server debugger (ports 9228 and 9229).`;
+    }
+
+    return undefined;
+}
+
 export abstract class CommandBase {
     protected readonly rootDir: LocalDirectory;
     protected profileDir: IEnvironment;

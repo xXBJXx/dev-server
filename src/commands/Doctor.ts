@@ -4,6 +4,7 @@ import path from 'node:path';
 import { satisfies } from 'semver';
 import type { DevServer } from '../DevServer.js';
 import {
+    getAdminPortValidationError,
     HIDDEN_ADMIN_PORT_OFFSET,
     HIDDEN_BROWSER_SYNC_PORT_OFFSET,
     OBJECTS_DB_PORT_OFFSET,
@@ -116,6 +117,16 @@ export class Doctor {
         }
 
         const adminPort = this.owner.config.adminPort;
+        const portError = getAdminPortValidationError(adminPort);
+        results.push({
+            check: 'Admin port configuration',
+            status: portError ? 'error' : 'ok',
+            detail: portError ?? `${adminPort} and all derived ports are valid`,
+        });
+        if (portError) {
+            return;
+        }
+
         const ports = [
             ['Admin proxy', adminPort],
             ['Admin internal', adminPort + HIDDEN_ADMIN_PORT_OFFSET],

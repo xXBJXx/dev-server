@@ -9,12 +9,16 @@ import {
     createAdminSocketMessage,
     parseAdminSocketMessage,
 } from '../dist/commands/adminSocketProtocol.js';
-import { HIDDEN_BROWSER_SYNC_PORT_OFFSET } from '../dist/commands/CommandBase.js';
+import {
+    getAdminPortValidationError,
+    HIDDEN_BROWSER_SYNC_PORT_OFFSET,
+    OBJECTS_DB_PORT_OFFSET,
+} from '../dist/commands/CommandBase.js';
 import { Debug } from '../dist/commands/Debug.js';
 import { getNestedFrontendWatchCommand } from '../dist/commands/frontendWatch.js';
 import { injectLiveReloadClient, LiveReloadServer } from '../dist/commands/LiveReloadServer.js';
 import { injectCode } from '../dist/jsonConfig.js';
-import { parseWindowsListeningPorts } from '../dist/commands/Doctor.js';
+import { Doctor, parseWindowsListeningPorts } from '../dist/commands/Doctor.js';
 import { findPortConflicts, formatPortConflict } from '../dist/commands/portDiagnostics.js';
 import { isProcessRunning, terminateProcessTreeGracefully } from '../dist/commands/processTree.js';
 import { Run } from '../dist/commands/Run.js';
@@ -28,6 +32,34 @@ import { Watch } from '../dist/commands/Watch.js';
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 
 describe('dev-server runtime regressions', () => {
+    it('validates the Admin port together with derived internal ports', () => {
+        assert.equal(getAdminPortValidationError(8081), undefined);
+        assert.match(getAdminPortValidationError(1.5), /integer/i);
+        assert.match(getAdminPortValidationError(0), /greater than 0/i);
+        assert.match(getAdminPortValidationError(9228), /reserved/i);
+        assert.match(getAdminPortValidationError(9229), /reserved/i);
+        assert.equal(getAdminPortValidationError(65535 - OBJECTS_DB_PORT_OFFSET), undefined);
+        assert.match(getAdminPortValidationError(65536 - OBJECTS_DB_PORT_OFFSET), /must not exceed/i);
+    });
+
+    it('reports an invalid profile port through doctor without probing invalid sockets', async () => {
+        const owner = {
+            adapterName: 'example',
+            config: { adminPort: 50000, useSymlinks: false },
+            isSetUp: () => true,
+            profileName: 'invalid-port',
+            profilePath: path.join(tmpdir(), 'missing-dev-server-profile'),
+            readMyPackageJson: async () => ({ engines: { node: '>=20' } }),
+            rootPath: path.join(tmpdir(), 'missing-dev-server-adapter'),
+        };
+
+        const results = await new Doctor(owner).diagnose();
+        const portResult = results.find(result => result.check === 'Admin port configuration');
+        assert.equal(portResult.status, 'error');
+        assert.match(portResult.detail, /must not exceed 47190/i);
+        assert.ok(!results.some(result => result.check === 'Objects DB port'));
+    });
+
     it('builds a valid object subscription message', () => {
         const id = 'system.adapter.example.0';
         assert.deepStrictEqual(JSON.parse(createAdminSocketMessage(1, 'subscribeObjects', [id])), [

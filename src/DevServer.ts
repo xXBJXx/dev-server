@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { gt } from 'semver';
 import yargs from 'yargs/yargs';
 import { Backup } from './commands/Backup.js';
+import { getAdminPortValidationError } from './commands/CommandBase.js';
 import { Debug } from './commands/Debug.js';
 import { Doctor } from './commands/Doctor.js';
 import { Run } from './commands/Run.js';
@@ -373,6 +374,11 @@ export class DevServer {
         force: boolean,
         useSymlinks: boolean,
     ): Promise<void> {
+        const portError = getAdminPortValidationError(adminPort);
+        if (portError) {
+            throw new Error(portError);
+        }
+
         let setup: Setup;
         if (remote) {
             setup = new SetupRemote(this, adminPort, dependencies, backupFile, force);
@@ -499,6 +505,11 @@ export class DevServer {
                 `dev-server is not set up in ${this.profilePath}.\nPlease use the command "setup" first to set up dev-server.`,
             );
             return process.exit(-1);
+        }
+
+        const portError = this.config && getAdminPortValidationError(this.config.adminPort);
+        if (portError) {
+            throw new Error(`Invalid dev-server profile "${this.profileName}": ${portError}`);
         }
     }
 

@@ -173,7 +173,9 @@ export abstract class RunCommandBase extends CommandBase {
     }
 
     protected async startServer(useBrowserSync = true): Promise<void> {
-        await this.waitForPort(HIDDEN_ADMIN_PORT_OFFSET, 'admin', 90);
+        if (!(await this.waitForPort(HIDDEN_ADMIN_PORT_OFFSET, 'admin', 90))) {
+            throw new Error(`Couldn't start ioBroker Admin`);
+        }
 
         const app = express();
 
