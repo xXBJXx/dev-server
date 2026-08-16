@@ -108,6 +108,7 @@ export abstract class RunCommandBase extends CommandBase {
             app.use(
                 createProxyMiddleware({
                     target: `http://127.0.0.1:${hiddenAdminPort}`,
+                    changeOrigin: true,
                     ws: true,
                 }),
             );
@@ -373,6 +374,7 @@ export abstract class RunCommandBase extends CommandBase {
                 app.use(
                     createProxyMiddleware([`!${adminPattern}`, '!/browser-sync/**'], {
                         target: adminUrl,
+                        changeOrigin: true,
                         ws: true,
                     }),
                 );
@@ -389,6 +391,7 @@ export abstract class RunCommandBase extends CommandBase {
                 app.use(
                     createProxyMiddleware({
                         target: adminUrl,
+                        changeOrigin: true,
                         ws: true,
                     }),
                 );
@@ -398,6 +401,7 @@ export abstract class RunCommandBase extends CommandBase {
             app.use(
                 createProxyMiddleware({
                     target: adminUrl,
+                    changeOrigin: true,
                     ws: true,
                 }),
             );
@@ -434,6 +438,7 @@ export abstract class RunCommandBase extends CommandBase {
             app.use(
                 createProxyMiddleware({
                     target: adminUrl,
+                    changeOrigin: true,
                     ws: true,
                 }),
             );
@@ -442,6 +447,7 @@ export abstract class RunCommandBase extends CommandBase {
             app.use(
                 createProxyMiddleware({
                     target: adminUrl,
+                    changeOrigin: true,
                     ws: true,
                 }),
             );
@@ -476,6 +482,7 @@ export abstract class RunCommandBase extends CommandBase {
             app.use(
                 createProxyMiddleware([`!${adminPattern}`, '!/browser-sync/**'], {
                     target: `http://127.0.0.1:${this.getPort(HIDDEN_ADMIN_PORT_OFFSET)}`,
+                    changeOrigin: true,
                     ws: true,
                 }),
             );
@@ -490,6 +497,7 @@ export abstract class RunCommandBase extends CommandBase {
             app.use(
                 createProxyMiddleware([`!${adminPattern}`], {
                     target: `http://127.0.0.1:${this.getPort(HIDDEN_ADMIN_PORT_OFFSET)}`,
+                    changeOrigin: true,
                     ws: true,
                 }),
             );
