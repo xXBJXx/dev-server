@@ -230,7 +230,7 @@ If you start the adapter from Admin, be aware that it will use the code uploaded
 
 The following options are available:
 
-`--no-browser-sync` Do not use BrowserSync for hot-reload (serve static files instead). This can help avoid compatibility issues or random failures with BrowserSync.
+`--no-browser-sync` Disable the built-in browser live reload and serve static files instead. The option name is retained for backwards compatibility.
 
 ### `dev-server watch`
 
@@ -257,7 +257,7 @@ The following options are available:
 
 `--doNotWatch <filepattern>` Provide files and locations relative to adapter base directory that should not be watched for changes. This option can be provided multiple times to ignore several locations.
 
-`--no-browser-sync` Do not use BrowserSync for hot-reload (serve static files instead). This can help avoid compatibility issues or random failures with BrowserSync.
+`--no-browser-sync` Disable the built-in browser live reload and serve static files instead. The option name is retained for backwards compatibility.
 
 ### `dev-server debug`
 

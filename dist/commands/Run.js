@@ -13,7 +13,7 @@ export class Run extends RunCommandBase {
     getStartupPorts() {
         const ports = super.getStartupPorts();
         if (this.useBrowserSync) {
-            ports.push({ name: 'BrowserSync', port: this.getPort(HIDDEN_BROWSER_SYNC_PORT_OFFSET) });
+            ports.push({ name: 'Live reload', port: this.getPort(HIDDEN_BROWSER_SYNC_PORT_OFFSET) });
         }
         return ports;
     }

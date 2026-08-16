@@ -3,12 +3,10 @@ export function injectCode(html: string, adapterName: string, jsonConfigFileName
         '</head>',
         `
 <script type="module">
-import { io } from "https://cdn.socket.io/4.4.1/socket.io.esm.min.js";
-
 let currentConfig = "";
 
-const socket = io("/browser-sync", { path: "/browser-sync/socket.io" });
-socket.on("browser:reload", async () => {
+const liveReload = new EventSource("/__dev_server_reload/events");
+liveReload.addEventListener("reload", async () => {
   // try for 2 seconds:
   for (let i = 0; i < 20; i++) {
     const newConfig = await readJsonConfig();

@@ -1,6 +1,5 @@
 import { tokenizer } from 'acorn';
 import axios from 'axios';
-import browserSync from 'browser-sync';
 import chalk from 'chalk';
 import express from 'express';
 import fg from 'fast-glob';
@@ -16,6 +15,7 @@ import { CommandBase, HIDDEN_ADMIN_PORT_OFFSET, HIDDEN_BROWSER_SYNC_PORT_OFFSET,
 import { RemoteConnection } from './RemoteConnection.js';
 import { createAdminSocketMessage, parseAdminSocketMessage } from './adminSocketProtocol.js';
 import { getNestedFrontendDirectories, getNestedFrontendWatchCommand, } from './frontendWatch.js';
+import { LiveReloadServer } from './LiveReloadServer.js';
 import { findPortConflicts, formatPortConflict } from './portDiagnostics.js';
 import { checkPort, delay, readJson } from './utils.js';
 export const CONTROLLER_DEBUGGER_PORT = 9228;
@@ -25,7 +25,7 @@ export class RunCommandBase extends CommandBase {
     websocketReconnectTimer;
     websocketMessageId = 0;
     webServer;
-    browserSyncInstances = [];
+    liveReloadServers = [];
     isExiting = false;
     exitPromise;
     shutdownHandlers = new Map();
@@ -70,7 +70,8 @@ export class RunCommandBase extends CommandBase {
         this.websocket?.terminate();
         this.websocket = undefined;
         this.socketEvents.removeAllListeners();
-        this.browserSyncInstances.forEach(instance => instance.exit());
+        await Promise.all(this.liveReloadServers.map(async (server) => await server.close()));
+        this.liveReloadServers.length = 0;
         this.webServer?.close();
         this.webServer = undefined;
         await this.stopRuntime();
@@ -300,7 +301,7 @@ export class RunCommandBase extends CommandBase {
      * - React build watching for HTML-based config or tabs
      * - JSON config file watching with WebSocket hot-reload
      * - JSON tab file watching with WebSocket hot-reload
-     * - HTML tab file watching with BrowserSync automatic reload
+     * - HTML tab file watching with automatic browser reload
      * - Appropriate proxy routing based on the UI types present
      *
      * Used when an adapter has jsonConfig AND also has custom tabs (either HTML or JSON-based).
@@ -310,7 +311,7 @@ export class RunCommandBase extends CommandBase {
      * @param uiCapabilities Object containing configType and tabType detected from io-package.json
      * @param uiCapabilities.configType 'json' | 'html' | 'none' - type of configuration UI
      * @param uiCapabilities.tabType 'json' | 'html' | 'none' - type of tab UI
-     * @param useBrowserSync Whether to use BrowserSync for hot-reload (default: true)
+     * @param useBrowserSync Whether to use built-in browser live reload (default: true). The name is retained for CLI compatibility.
      */
     async createCombinedConfigProxy(app, uiCapabilities, useBrowserSync = true) {
         // This method combines the functionality of createJsonConfigProxy and createHtmlConfigProxy
@@ -319,19 +320,18 @@ export class RunCommandBase extends CommandBase {
         const browserSyncPort = this.getPort(HIDDEN_BROWSER_SYNC_PORT_OFFSET);
         const adminUrl = `http://127.0.0.1:${this.getPort(HIDDEN_ADMIN_PORT_OFFSET)}`;
         let hasReact = false;
-        let bs = null;
+        let liveReload;
         if (useBrowserSync) {
             // Setup React build watching if needed (for HTML config or HTML tabs)
             if (uiCapabilities.configType === 'html' || uiCapabilities.tabType === 'html') {
                 hasReact = await this.setupReactWatch(pathRewrite);
             }
-            // Start browser-sync
-            bs = this.startBrowserSync(browserSyncPort, hasReact);
+            liveReload = await this.startLiveReload(browserSyncPort, hasReact);
         }
         // Handle jsonConfig file watching if present
-        if (uiCapabilities.configType === 'json' && useBrowserSync && bs) {
+        if (uiCapabilities.configType === 'json' && liveReload) {
             const jsonConfigFile = this.getJsonConfigPath();
-            this.setupJsonFileWatch(bs, jsonConfigFile, path.basename(jsonConfigFile));
+            this.setupJsonFileWatch(liveReload, jsonConfigFile, path.basename(jsonConfigFile));
             // "proxy" for the main page which injects our script
             app.get('/', async (_req, res) => {
                 const { data } = await axios.get(adminUrl);
@@ -339,22 +339,22 @@ export class RunCommandBase extends CommandBase {
             });
         }
         // Handle tab file watching if present
-        if (uiCapabilities.tabType !== 'none' && useBrowserSync && bs) {
+        if (uiCapabilities.tabType !== 'none' && liveReload) {
             if (uiCapabilities.tabType === 'json') {
                 // Watch JSON tab files
                 const jsonTabPath = path.resolve(this.rootPath, 'admin/jsonTab.json');
                 const jsonTab5Path = path.resolve(this.rootPath, 'admin/jsonTab.json5');
-                this.setupJsonFileWatch(bs, jsonTabPath, 'jsonTab.json');
-                this.setupJsonFileWatch(bs, jsonTab5Path, 'jsonTab.json5');
+                this.setupJsonFileWatch(liveReload, jsonTabPath, 'jsonTab.json');
+                this.setupJsonFileWatch(liveReload, jsonTab5Path, 'jsonTab.json5');
             }
             if (uiCapabilities.tabType === 'html') {
                 // Watch HTML tab files
                 const tabHtmlPath = path.resolve(this.rootPath, 'admin/tab.html');
                 if (existsSync(tabHtmlPath)) {
-                    bs.watch(tabHtmlPath, undefined, (e) => {
+                    liveReload.watch(tabHtmlPath, e => {
                         if (e === 'change') {
                             this.log.info('Detected change in tab.html, reloading browser...');
-                            // For HTML tabs, we rely on BrowserSync's automatic reload
+                            // The built-in watcher broadcasts the actual reload.
                         }
                     });
                 }
@@ -363,24 +363,24 @@ export class RunCommandBase extends CommandBase {
         // Setup proxies
         if (useBrowserSync) {
             if (uiCapabilities.configType === 'html' || uiCapabilities.tabType === 'html') {
-                // browser-sync proxy for adapter files (for HTML config or HTML tabs)
+                // live-reload proxy for adapter files (for HTML config or HTML tabs)
                 const adminPattern = `/adapter/${this.adapterName}/**`;
                 pathRewrite[`^/adapter/${this.adapterName}/`] = '/';
-                app.use(createProxyMiddleware([adminPattern, '/browser-sync/**'], {
+                app.use(createProxyMiddleware([adminPattern, '/__dev_server_reload/**'], {
                     target: `http://127.0.0.1:${browserSyncPort}`,
                     //ws: true, // can't have two web-socket connections proxying to different locations
                     pathRewrite,
                 }));
                 // admin proxy
-                app.use(createProxyMiddleware([`!${adminPattern}`, '!/browser-sync/**'], {
+                app.use(createProxyMiddleware([`!${adminPattern}`, '!/__dev_server_reload/**'], {
                     target: adminUrl,
                     changeOrigin: true,
                     ws: true,
                 }));
             }
             else {
-                // browser-sync proxy (for JSON config only)
-                app.use(createProxyMiddleware(['/browser-sync/**'], {
+                // live-reload event proxy (for JSON config only)
+                app.use(createProxyMiddleware(['/__dev_server_reload/**'], {
                     target: `http://127.0.0.1:${browserSyncPort}`,
                     // ws: true, // can't have two web-socket connections proxying to different locations
                 }));
@@ -393,7 +393,7 @@ export class RunCommandBase extends CommandBase {
             }
         }
         else {
-            // Direct admin proxy without browser-sync
+            // Direct admin proxy without live reload
             app.use(createProxyMiddleware({
                 target: adminUrl,
                 changeOrigin: true,
@@ -401,22 +401,22 @@ export class RunCommandBase extends CommandBase {
             }));
         }
     }
-    createJsonConfigProxy(app, useBrowserSync = true) {
+    async createJsonConfigProxy(app, useBrowserSync = true) {
         const jsonConfigFile = this.getJsonConfigPath();
         const adminUrl = `http://127.0.0.1:${this.getPort(HIDDEN_ADMIN_PORT_OFFSET)}`;
         if (useBrowserSync) {
-            // Use BrowserSync for hot-reload functionality
+            // Use the built-in live-reload service
             const browserSyncPort = this.getPort(HIDDEN_BROWSER_SYNC_PORT_OFFSET);
-            const bs = this.startBrowserSync(browserSyncPort, false);
+            const liveReload = await this.startLiveReload(browserSyncPort, false);
             // Setup file watching for jsonConfig changes
-            this.setupJsonFileWatch(bs, jsonConfigFile, path.basename(jsonConfigFile));
+            this.setupJsonFileWatch(liveReload, jsonConfigFile, path.basename(jsonConfigFile));
             // "proxy" for the main page which injects our script
             app.get('/', async (_req, res) => {
                 const { data } = await axios.get(adminUrl);
                 res.send(injectCode(data, this.adapterName, path.basename(jsonConfigFile)));
             });
-            // browser-sync proxy
-            app.use(createProxyMiddleware(['/browser-sync/**'], {
+            // live-reload event proxy
+            app.use(createProxyMiddleware(['/__dev_server_reload/**'], {
                 target: `http://127.0.0.1:${browserSyncPort}`,
                 // ws: true, // can't have two web-socket connections proxying to different locations
             }));
@@ -428,14 +428,13 @@ export class RunCommandBase extends CommandBase {
             }));
         }
         else {
-            // Serve without BrowserSync - just proxy admin directly
+            // Serve without live reload - just proxy admin directly
             app.use(createProxyMiddleware({
                 target: adminUrl,
                 changeOrigin: true,
                 ws: true,
             }));
         }
-        return Promise.resolve();
     }
     async createHtmlConfigProxy(app, useBrowserSync = true) {
         const pathRewrite = {};
@@ -443,25 +442,25 @@ export class RunCommandBase extends CommandBase {
         // Setup React build watching if needed
         const hasReact = await this.setupReactWatch(pathRewrite);
         if (useBrowserSync) {
-            // Use BrowserSync for hot-reload functionality
+            // Use the built-in live-reload service
             const browserSyncPort = this.getPort(HIDDEN_BROWSER_SYNC_PORT_OFFSET);
-            this.startBrowserSync(browserSyncPort, hasReact);
-            // browser-sync proxy
+            await this.startLiveReload(browserSyncPort, hasReact);
+            // live-reload proxy
             pathRewrite[`^/adapter/${this.adapterName}/`] = '/';
-            app.use(createProxyMiddleware([adminPattern, '/browser-sync/**'], {
+            app.use(createProxyMiddleware([adminPattern, '/__dev_server_reload/**'], {
                 target: `http://127.0.0.1:${browserSyncPort}`,
                 //ws: true, // can't have two web-socket connections proxying to different locations
                 pathRewrite,
             }));
             // admin proxy
-            app.use(createProxyMiddleware([`!${adminPattern}`, '!/browser-sync/**'], {
+            app.use(createProxyMiddleware([`!${adminPattern}`, '!/__dev_server_reload/**'], {
                 target: `http://127.0.0.1:${this.getPort(HIDDEN_ADMIN_PORT_OFFSET)}`,
                 changeOrigin: true,
                 ws: true,
             }));
         }
         else {
-            // Serve without BrowserSync - serve admin files directly and proxy the rest
+            // Serve without live reload - serve admin files directly and proxy the rest
             const adminPath = path.resolve(this.rootPath, 'admin/');
             // serve static admin files
             app.use(`/adapter/${this.adapterName}`, express.static(adminPath));
@@ -522,34 +521,23 @@ export class RunCommandBase extends CommandBase {
         }
         return nestedWatchCommands.length > 0;
     }
-    startBrowserSync(port, hasReact) {
-        this.log.notice('Starting browser-sync');
-        const bs = browserSync.create();
-        this.browserSyncInstances.push(bs);
+    async startLiveReload(port, hasReact) {
+        this.log.notice('Starting built-in live reload');
         const adminPath = path.resolve(this.rootPath, 'admin/');
-        const config = {
-            server: { baseDir: adminPath, directory: true },
-            port: port,
-            open: false,
-            ui: false,
-            logLevel: 'info',
-            reloadDelay: hasReact ? 500 : 0,
-            reloadDebounce: hasReact ? 500 : 0,
-            files: [path.join(adminPath, '**')],
-        };
-        // console.log(config);
-        bs.init(config);
-        return bs;
+        const server = new LiveReloadServer(adminPath, port, hasReact ? 500 : 0, this.log);
+        await server.start();
+        this.liveReloadServers.push(server);
+        return server;
     }
     /**
      * Helper method to setup file watching for a JSON config file (jsonConfig, jsonTab, etc.)
      * Uploads the file to ioBroker via WebSocket when changes are detected
      */
-    setupJsonFileWatch(bs, filePath, fileName) {
+    setupJsonFileWatch(liveReload, filePath, fileName) {
         if (!existsSync(filePath)) {
             return;
         }
-        bs.watch(filePath, undefined, async (e) => {
+        liveReload.watch(filePath, async (e) => {
             if (e === 'change') {
                 this.log.info(`Detected change in ${fileName}, uploading to ioBroker...`);
                 const content = await readFile(filePath);

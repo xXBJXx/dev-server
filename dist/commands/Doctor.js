@@ -95,7 +95,7 @@ export class Doctor {
         const ports = [
             ['Admin proxy', adminPort],
             ['Admin internal', adminPort + HIDDEN_ADMIN_PORT_OFFSET],
-            ['BrowserSync', adminPort + HIDDEN_BROWSER_SYNC_PORT_OFFSET],
+            ['Live reload', adminPort + HIDDEN_BROWSER_SYNC_PORT_OFFSET],
             ['States DB', adminPort + STATES_DB_PORT_OFFSET],
             ['Objects DB', adminPort + OBJECTS_DB_PORT_OFFSET],
             ['Controller debugger', CONTROLLER_DEBUGGER_PORT],

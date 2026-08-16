@@ -33,7 +33,7 @@ export class Watch extends RunCommandBase {
     protected override getStartupPorts(): PortDefinition[] {
         const ports = super.getStartupPorts();
         if (this.useBrowserSync) {
-            ports.push({ name: 'BrowserSync', port: this.getPort(HIDDEN_BROWSER_SYNC_PORT_OFFSET) });
+            ports.push({ name: 'Live reload', port: this.getPort(HIDDEN_BROWSER_SYNC_PORT_OFFSET) });
         }
         if (this.startAdapter) {
             ports.push({ name: 'Adapter debugger', port: ADAPTER_DEBUGGER_PORT });

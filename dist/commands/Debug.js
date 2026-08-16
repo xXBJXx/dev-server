@@ -21,7 +21,7 @@ export class Debug extends RunCommandBase {
         const ports = super
             .getStartupPorts()
             .filter(definition => definition.port !== CONTROLLER_DEBUGGER_PORT || !this.isJSController());
-        ports.push({ name: 'BrowserSync', port: this.getPort(HIDDEN_BROWSER_SYNC_PORT_OFFSET) });
+        ports.push({ name: 'Live reload', port: this.getPort(HIDDEN_BROWSER_SYNC_PORT_OFFSET) });
         ports.push({
             name: this.isJSController() ? 'Controller debugger' : 'Adapter debugger',
             port: ADAPTER_DEBUGGER_PORT,

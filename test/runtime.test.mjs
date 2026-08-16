@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'mocha';
@@ -11,6 +12,8 @@ import {
 import { HIDDEN_BROWSER_SYNC_PORT_OFFSET } from '../dist/commands/CommandBase.js';
 import { Debug } from '../dist/commands/Debug.js';
 import { getNestedFrontendWatchCommand } from '../dist/commands/frontendWatch.js';
+import { injectLiveReloadClient, LiveReloadServer } from '../dist/commands/LiveReloadServer.js';
+import { injectCode } from '../dist/jsonConfig.js';
 import { parseWindowsListeningPorts } from '../dist/commands/Doctor.js';
 import { findPortConflicts, formatPortConflict } from '../dist/commands/portDiagnostics.js';
 import { isProcessRunning, terminateProcessTreeGracefully } from '../dist/commands/processTree.js';
@@ -69,6 +72,66 @@ describe('dev-server runtime regressions', () => {
 
     it('does not turn arbitrary nested builds into persistent watchers', () => {
         assert.equal(getNestedFrontendWatchCommand('src-admin', { scripts: { build: 'webpack' } }), undefined);
+    });
+
+    it('injects the built-in live-reload client exactly once', () => {
+        const once = injectLiveReloadClient('<html><body>Admin</body></html>');
+        const twice = injectLiveReloadClient(once);
+        assert.match(once, /data-dev-server-live-reload/);
+        assert.match(once, /new EventSource\('\/__dev_server_reload\/events'\)/);
+        assert.equal(twice, once);
+    });
+
+    it('uses built-in live-reload events for jsonConfig updates', () => {
+        const html = injectCode('<html><head></head><body></body></html>', 'example', 'jsonConfig.json');
+        assert.match(html, /new EventSource\("\/__dev_server_reload\/events"\)/);
+        assert.doesNotMatch(html, /socket\.io|browser-sync/);
+    });
+
+    it('serves HTML and broadcasts a reload after a file change', async function () {
+        this.timeout(10_000);
+        const directory = await mkdtemp(path.join(tmpdir(), 'dev-server-live-reload-'));
+        const htmlPath = path.join(directory, 'index.html');
+        await writeFile(htmlPath, '<html><body>before</body></html>');
+        const server = new LiveReloadServer(directory, 0, 0, { warn: () => undefined });
+
+        try {
+            await server.start();
+            const response = await fetch(`http://127.0.0.1:${server.listeningPort}/index.html`);
+            assert.equal(response.status, 200);
+            assert.match(await response.text(), /data-dev-server-live-reload/);
+
+            const { get } = await import('node:http');
+            await new Promise((resolve, reject) => {
+                let changed = false;
+                let received = '';
+                const timeout = setTimeout(() => reject(new Error('Timed out waiting for reload event')), 5_000);
+                const request = get(`http://127.0.0.1:${server.listeningPort}/__dev_server_reload/events`, res => {
+                    res.setEncoding('utf8');
+                    res.on('data', chunk => {
+                        received += chunk;
+                        if (!changed && received.includes('connected')) {
+                            changed = true;
+                            void writeFile(htmlPath, '<html><body>after</body></html>').catch(reject);
+                        }
+                        if (received.includes('event: reload')) {
+                            clearTimeout(timeout);
+                            request.destroy();
+                            resolve();
+                        }
+                    });
+                });
+                request.once('error', error => {
+                    if (error.code !== 'ECONNRESET') {
+                        clearTimeout(timeout);
+                        reject(error);
+                    }
+                });
+            });
+        } finally {
+            await server.close();
+            await rm(directory, { recursive: true, force: true });
+        }
     });
 
     it('extracts listening port owners from Windows netstat output', () => {

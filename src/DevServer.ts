@@ -123,7 +123,7 @@ export class DevServer {
                     noBrowserSync: {
                         type: 'boolean',
                         alias: 'b',
-                        description: 'Do not use BrowserSync for hot-reload (serve static files instead)',
+                        description: 'Disable built-in browser live reload (serve static files instead)',
                     },
                 },
                 async args => await this.run(!args.noBrowserSync),
@@ -151,7 +151,7 @@ export class DevServer {
                     noBrowserSync: {
                         type: 'boolean',
                         alias: 'b',
-                        description: 'Do not use BrowserSync for hot-reload (serve static files instead)',
+                        description: 'Disable built-in browser live reload (serve static files instead)',
                     },
                 },
                 async args => await this.watch(!args.noStart, !!args.noInstall, args.doNotWatch, !args.noBrowserSync),

@@ -77,7 +77,7 @@ export class DevServer {
             noBrowserSync: {
                 type: 'boolean',
                 alias: 'b',
-                description: 'Do not use BrowserSync for hot-reload (serve static files instead)',
+                description: 'Disable built-in browser live reload (serve static files instead)',
             },
         }, async (args) => await this.run(!args.noBrowserSync))
             .command(['watch [profile]', 'w'], 'Run ioBroker dev-server and start the adapter in "watch" mode. The adapter will automatically restart when its source code changes. You may attach a debugger to the running adapter.', {
@@ -99,7 +99,7 @@ export class DevServer {
             noBrowserSync: {
                 type: 'boolean',
                 alias: 'b',
-                description: 'Do not use BrowserSync for hot-reload (serve static files instead)',
+                description: 'Disable built-in browser live reload (serve static files instead)',
             },
         }, async (args) => await this.watch(!args.noStart, !!args.noInstall, args.doNotWatch, !args.noBrowserSync))
             .command(['debug [profile]', 'd'], 'Run ioBroker dev-server and start the adapter from ioBroker in "debug" mode. You may attach a debugger to the running adapter.', {
