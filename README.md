@@ -236,10 +236,12 @@ The following options are available:
 
 Run dev-server and start the adapter in "watch" mode.
 
-The adapter will automatically restart when its source code changes (with a 2-seconds delay).
+The adapter will automatically restart when its source code or instance configuration changes (with a short delay).
 
 > [!IMPORTANT]
-> **DO NOT** start the adapter manually in `ioBroker.admin`! If you see errors like `ADAPTER_ALREADY_RUNNING` then most likely you ignored this info :-)
+> **DO NOT** start the adapter manually in `ioBroker.admin`. Watch mode keeps the controller-managed instance disabled and starts a separate debug process. If the instance is enabled accidentally, dev-server disables it again to stop a duplicate-process restart loop. A single `ADAPTER_ALREADY_RUNNING` message may still appear while the controller reacts to the change.
+
+Watch mode also refuses to start when the selected profile's objects database is already listening. This prevents two dev-server processes from using the same profile at the same time.
 
 You may attach a debugger to the running adapter. Keep in mind that the debugger will be detached when you change your source code, you need to manually attach again to the new process. Watch the console output for the correct process id to attach to.
 
@@ -406,6 +408,19 @@ You may now launch this configuration with "Start Debugging" (F5).
 ### WebStorm
 
 Depending on your preferences, you can either start the adapter with dev-server and then attach your debugger, or you can start dev-server and then launch the adapter from WebStorm. Both setups are explained below.
+
+For a one-click npm Run/Debug configuration, add scripts like these to the adapter's `package.json`:
+
+```json
+{
+    "scripts": {
+        "dev": "dev-server watch --noInstall",
+        "dev:no-start": "dev-server watch --noInstall --noStart"
+    }
+}
+```
+
+Select the `dev` npm script in WebStorm to let dev-server manage the adapter, or `dev:no-start` when WebStorm should launch the adapter process itself. Stopping the Run/Debug configuration sends the shutdown signal to dev-server and its child processes.
 
 In order to improve the performance of WebStorm, I recommend excluding the `.dev-server` directory from the context menu (see screenshot). This will prevent WebStorm from indexing the directory, which could take some time.
 

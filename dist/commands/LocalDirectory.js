@@ -100,6 +100,21 @@ export class LocalDirectory {
             });
         });
     }
+    /**
+     * Start an npm command without using a shell. Passing arguments together with
+     * `shell: true` is deprecated on Windows and also needlessly expands the
+     * command's injection surface.
+     */
+    spawnNpmAndAwaitOutput(args, awaitMsg) {
+        const npmCli = process.env.npm_execpath ||
+            path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+        if (existsSync(npmCli)) {
+            return this.spawnAndAwaitOutput(process.execPath, [npmCli, ...args], awaitMsg);
+        }
+        // Non-standard Node installations may not place npm next to the Node
+        // executable. The direct command remains shell-free on POSIX systems.
+        return this.spawnAndAwaitOutput('npm', args, awaitMsg);
+    }
     spawnProcess(command, args, options) {
         return new Promise((resolve, reject) => {
             let processSpawned = false;

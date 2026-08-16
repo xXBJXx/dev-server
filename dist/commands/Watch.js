@@ -1,15 +1,23 @@
+import { DBConnection } from '@iobroker/testing/build/tests/integration/lib/dbConnection.js';
 import chokidar from 'chokidar';
 import fg from 'fast-glob';
 import { existsSync } from 'node:fs';
+import { readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import nodemon from 'nodemon';
-import { RunCommandBase } from './RunCommandBase.js';
-import { delay } from './utils.js';
+import { ADAPTER_DEBUGGER_PORT, RunCommandBase } from './RunCommandBase.js';
+import { OBJECTS_DB_PORT_OFFSET } from './CommandBase.js';
+import { RemoteConnection } from './RemoteConnection.js';
+import { checkPort, delay } from './utils.js';
 export class Watch extends RunCommandBase {
     startAdapter;
     noInstall;
     doNotWatch;
     useBrowserSync;
+    fileWatchers = [];
+    nodemonStarted = false;
+    restartTimer;
+    ignoreConfigChangesUntil = 0;
     constructor(owner, startAdapter, noInstall, doNotWatch, useBrowserSync) {
         super(owner);
         this.startAdapter = startAdapter;
@@ -28,10 +36,90 @@ export class Watch extends RunCommandBase {
             await this.startServer(this.useBrowserSync);
         }
         else {
+            await this.prepareLocalProfileForWatch();
             await this.startJsController();
             await this.startServer(this.useBrowserSync);
             await this.startAdapterWatch();
         }
+    }
+    async prepareLocalProfileForWatch() {
+        if (this.profileDir instanceof RemoteConnection) {
+            return;
+        }
+        try {
+            await checkPort(this.getPort(OBJECTS_DB_PORT_OFFSET));
+        }
+        catch {
+            // The profile DB is not listening, so its files can safely be opened offline.
+            const db = await this.startOfflineProfileDb();
+            try {
+                const id = `system.adapter.${this.adapterName}.0`;
+                const instance = await db.getObject(id);
+                if (instance?.common?.enabled) {
+                    this.log.warn(`Disabling controller-managed ${this.adapterName}.0 before startup to prevent a duplicate adapter process.`);
+                    // @ts-expect-error DBConnection uses wider ioBroker object types than this dynamically built ID
+                    await db.setObject(id, {
+                        ...instance,
+                        common: { ...instance.common, enabled: false },
+                    });
+                }
+                // A previously interrupted development session may have left these
+                // transient states at true. No controller is running at this point.
+                for (const adapter of ['admin', this.adapterName]) {
+                    await db.setState(`system.adapter.${adapter}.0.alive`, { val: false, ack: true });
+                    await db.setState(`system.adapter.${adapter}.0.connected`, { val: false, ack: true });
+                }
+            }
+            finally {
+                await db.stop();
+            }
+            return;
+        }
+        throw new Error(`The dev-server profile "${this.owner.profileName}" is already running on objects DB port ` +
+            `${this.getPort(OBJECTS_DB_PORT_OFFSET)}. Stop the other dev-server process before starting watch again.`);
+    }
+    async startOfflineProfileDb() {
+        const dataDir = path.join(this.profilePath, 'iobroker-data');
+        const lockFiles = ['objects.jsonl.lock', 'states.jsonl.lock'].map(file => path.join(dataDir, file));
+        const existingLocks = (await Promise.all(lockFiles.map(async (lockFile) => {
+            try {
+                return { lockFile, lockStat: await stat(lockFile) };
+            }
+            catch (error) {
+                if (error?.code === 'ENOENT') {
+                    return undefined;
+                }
+                throw error;
+            }
+        }))).filter(lock => lock !== undefined);
+        if (existingLocks.length) {
+            // Give a concurrently starting controller time to open its DB port.
+            await delay(2000);
+            let profileStarted = false;
+            try {
+                await checkPort(this.getPort(OBJECTS_DB_PORT_OFFSET));
+                profileStarted = true;
+            }
+            catch {
+                // The port is still free.
+            }
+            if (profileStarted) {
+                throw new Error(`The dev-server profile "${this.owner.profileName}" started while checking its database locks.`);
+            }
+            for (const { lockFile, lockStat } of existingLocks) {
+                if (!lockStat.isDirectory() || (await readdir(lockFile)).length > 0) {
+                    throw new Error(`Refusing to remove unexpected database lock contents: ${lockFile}`);
+                }
+                if (Date.now() - lockStat.mtimeMs < 10_000) {
+                    throw new Error(`Database lock is still fresh: ${lockFile}`);
+                }
+                await rm(lockFile, { recursive: true, force: true });
+                this.log.warn(`Removed stale database lock ${lockFile}`);
+            }
+        }
+        const db = new DBConnection('iobroker', this.profilePath, this.log);
+        await db.start();
+        return db;
     }
     async startAdapterWatch() {
         // figure out if we need to watch for TypeScript changes
@@ -65,9 +153,7 @@ export class Watch extends RunCommandBase {
     async startTscWatch() {
         this.log.notice('Starting tsc --watch');
         this.log.debug('Waiting for first successful tsc build...');
-        await this.rootDir.spawnAndAwaitOutput('npm', ['run', 'watch:ts'], /watching (files )?for/i, {
-            shell: true,
-        });
+        await this.rootDir.spawnNpmAndAwaitOutput(['run', 'watch:ts'], /watching (files )?for/i);
     }
     startFileSync(destinationDir, mainFileSuffix) {
         this.log.debug(`Starting file system sync from ${this.rootPath} to ${destinationDir}`);
@@ -81,6 +167,7 @@ export class Watch extends RunCommandBase {
             const patterns = this.getFilePatterns(patternList, true);
             const ignoreFiles = [];
             const watcher = chokidar.watch(fg.sync(patterns), { cwd: this.rootPath });
+            this.fileWatchers.push(watcher);
             let ready = false;
             let initialEventPromises = [];
             watcher.on('error', reject);
@@ -159,6 +246,7 @@ export class Watch extends RunCommandBase {
             isExiting = true;
         });
         nodemon(this.createNodemonConfig(script, fullBaseDir));
+        this.nodemonStarted = true;
         nodemon
             .on('log', (msg) => {
             if (isExiting) {
@@ -199,13 +287,64 @@ export class Watch extends RunCommandBase {
         });
         if (!this.isJSController()) {
             this.socketEvents.on('objectChange', (args) => {
-                if (Array.isArray(args) && args.length > 1 && args[0] === `system.adapter.${this.adapterName}.0`) {
-                    this.log.notice('Adapter configuration changed, restarting nodemon...');
-                    nodemon.restart();
+                if (!Array.isArray(args) || args.length < 2 || args[0] !== `system.adapter.${this.adapterName}.0`) {
+                    return;
                 }
+                if (Date.now() < this.ignoreConfigChangesUntil) {
+                    return;
+                }
+                if (args[1]?.common?.enabled) {
+                    if (this.restartTimer) {
+                        clearTimeout(this.restartTimer);
+                        this.restartTimer = undefined;
+                    }
+                    this.handleAdapterConfigChange(args[1]);
+                    return;
+                }
+                if (this.restartTimer) {
+                    clearTimeout(this.restartTimer);
+                }
+                this.restartTimer = setTimeout(() => {
+                    this.handleAdapterConfigChange(args[1]);
+                }, 300);
             });
         }
         return Promise.resolve();
+    }
+    handleAdapterConfigChange(instanceObject) {
+        if (this.exiting) {
+            return;
+        }
+        if (instanceObject?.common?.enabled) {
+            this.log.warn(`The controller-managed ${this.adapterName}.0 instance was enabled while watch mode is running. ` +
+                'Disabling it to stop a duplicate-process restart loop.');
+            this.ignoreConfigChangesUntil = Date.now() + 2000;
+            this.sendSocketEvent('setObject', [
+                `system.adapter.${this.adapterName}.0`,
+                {
+                    ...instanceObject,
+                    common: { ...instanceObject.common, enabled: false },
+                },
+            ], true);
+            return;
+        }
+        if (!this.exiting) {
+            this.log.notice('Adapter configuration changed, restarting nodemon...');
+            nodemon.restart();
+        }
+    }
+    async stopRuntime() {
+        if (this.restartTimer) {
+            clearTimeout(this.restartTimer);
+            this.restartTimer = undefined;
+        }
+        await Promise.all(this.fileWatchers.map(watcher => watcher.close()));
+        this.fileWatchers.length = 0;
+        if (this.nodemonStarted) {
+            this.nodemonStarted = false;
+            nodemon.removeAllListeners('quit');
+            nodemon.emit('quit');
+        }
     }
     createNodemonConfig(script, fullBaseDir) {
         const args = this.isJSController() ? [] : ['--debug', '0'];
@@ -244,7 +383,18 @@ export class Watch extends RunCommandBase {
         if (!match) {
             return;
         }
-        const debugPid = await this.waitForNodeChildProcess(parseInt(match[1]));
+        let debugPid;
+        try {
+            debugPid = await this.waitForNodeChildProcess(parseInt(match[1]));
+        }
+        catch (error) {
+            // ps-tree may not understand the process-list output of brand-new
+            // Windows/Node.js versions. The inspector port remains stable and
+            // can still be used to attach the debugger.
+            this.log.warn(`Couldn't determine nodemon child process: ${error}`);
+            this.log.box(`Debugger is now available on 127.0.0.1:${ADAPTER_DEBUGGER_PORT}`);
+            return;
+        }
         this.log.box(`Debugger is now available on process id ${debugPid}`);
     }
 }

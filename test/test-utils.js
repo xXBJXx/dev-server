@@ -17,6 +17,11 @@ function terminateProcess(proc, signal) {
     if (process.platform === 'win32' && proc.pid) {
         const taskkill = spawn('taskkill', ['/pid', `${proc.pid}`, '/T', '/F'], { stdio: 'ignore' });
         taskkill.once('error', () => proc.kill(signal));
+        taskkill.once('close', code => {
+            if (code !== 0 && proc.exitCode === null) {
+                proc.kill(signal);
+            }
+        });
         return;
     }
 

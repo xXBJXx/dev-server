@@ -19,6 +19,7 @@
     "scripts": {
         "test": "mocha test/*.test.mjs --exit",
         "test:cli": "mocha test/cli.test.mjs --exit",
+        "test:runtime": "mocha test/runtime.test.mjs --exit",
         "test:js": "mocha test/js-adapters.test.mjs --exit",
         "test:ts": "mocha test/ts-adapters.test.mjs --exit",
         "test:pure-ts": "mocha test/pure-ts-adapters.test.mjs --exit",
@@ -65,7 +66,6 @@
         "axios": "^1.13.2",
         "boxen": "^8.0.1",
         "browser-sync": "^3.0.4",
-        "bs-html-injector": "^3.0.3",
         "chalk": "^5.6.2",
         "chokidar": "^5.0.0",
         "enquirer": "^2.4.1",

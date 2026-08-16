@@ -14,11 +14,19 @@ import WebSocket from 'ws';
 import { injectCode } from '../jsonConfig.js';
 import { CommandBase, HIDDEN_ADMIN_PORT_OFFSET, HIDDEN_BROWSER_SYNC_PORT_OFFSET, IOBROKER_CONTROLLER, OBJECTS_DB_PORT_OFFSET, STATES_DB_PORT_OFFSET, } from './CommandBase.js';
 import { RemoteConnection } from './RemoteConnection.js';
+import { createAdminSocketMessage, parseAdminSocketMessage } from './adminSocketProtocol.js';
 import { checkPort, delay, readJson } from './utils.js';
 const CONTROLLER_DEBUGGER_PORT = 9228;
 export const ADAPTER_DEBUGGER_PORT = 9229;
 export class RunCommandBase extends CommandBase {
     websocket;
+    websocketReconnectTimer;
+    websocketMessageId = 0;
+    webServer;
+    browserSyncInstances = [];
+    isExiting = false;
+    exitPromise;
+    sigintHandler;
     socketEvents = new EventEmitter();
     async prepare() {
         await super.prepare();
@@ -34,6 +42,35 @@ export class RunCommandBase extends CommandBase {
         return Promise.resolve();
     }
     async exit(exitCode, signal = 'SIGINT') {
+        if (!this.exitPromise) {
+            this.isExiting = true;
+            this.exitPromise = this.performExit(exitCode, signal);
+        }
+        return this.exitPromise;
+    }
+    get exiting() {
+        return this.isExiting;
+    }
+    stopRuntime() {
+        return Promise.resolve();
+    }
+    async performExit(exitCode, signal) {
+        if (this.sigintHandler) {
+            process.off('SIGINT', this.sigintHandler);
+            this.sigintHandler = undefined;
+        }
+        if (this.websocketReconnectTimer) {
+            clearTimeout(this.websocketReconnectTimer);
+            this.websocketReconnectTimer = undefined;
+        }
+        this.websocket?.removeAllListeners();
+        this.websocket?.terminate();
+        this.websocket = undefined;
+        this.socketEvents.removeAllListeners();
+        this.browserSyncInstances.forEach(instance => instance.exit());
+        this.webServer?.close();
+        this.webServer = undefined;
+        await this.stopRuntime();
         return super.exit(exitCode, signal);
     }
     async startJsController() {
@@ -43,6 +80,9 @@ export class RunCommandBase extends CommandBase {
             '--preserve-symlinks-main',
             IOBROKER_CONTROLLER,
         ], async (code) => {
+            if (this.isExiting) {
+                return;
+            }
             console.error(chalk.yellow(`ioBroker controller exited with code ${code}`));
             return this.exit(-1, 'SIGKILL');
         });
@@ -105,19 +145,12 @@ export class RunCommandBase extends CommandBase {
         // start express
         this.log.notice(`Starting web server on port ${this.config.adminPort}`);
         const server = app.listen(this.config.adminPort, '127.0.0.1');
-        let exiting = false;
-        process.on('SIGINT', () => {
+        this.webServer = server;
+        this.sigintHandler = () => {
             this.log.notice('dev-server is exiting...');
-            exiting = true;
-            server.close();
-            // do not kill this process when receiving SIGINT, but let all child processes exit first
-            // but send the signal to all child processes when not in a tty environment
-            if (!process.stdin.isTTY) {
-                this.log.silly('Sending SIGINT to all child processes...');
-                this.rootDir.sendSigIntToChildProcesses();
-                this.profileDir.sendSigIntToChildProcesses();
-            }
-        });
+            void this.exit(0);
+        };
+        process.once('SIGINT', this.sigintHandler);
         await new Promise((resolve, reject) => {
             server.on('listening', resolve);
             server.on('error', reject);
@@ -125,16 +158,20 @@ export class RunCommandBase extends CommandBase {
         });
         if (!this.isJSController()) {
             const connectWebSocketClient = () => {
-                if (exiting) {
+                if (this.isExiting) {
                     return;
                 }
-                // TODO: replace this with @iobroker/socket-client
                 this.websocket = new WebSocket(`ws://127.0.0.1:${hiddenAdminPort}/?sid=${Date.now()}&name=admin`);
-                this.websocket.on('open', () => this.log.silly('WebSocket open'));
+                this.websocket.on('open', () => {
+                    this.log.silly('WebSocket open');
+                    this.sendSocketEvent('subscribeObjects', [`system.adapter.${this.adapterName}.0`]);
+                });
                 this.websocket.on('close', () => {
                     this.log.silly('WebSocket closed');
                     this.websocket = undefined;
-                    setTimeout(connectWebSocketClient, 1000);
+                    if (!this.isExiting) {
+                        this.websocketReconnectTimer = setTimeout(connectWebSocketClient, 1000);
+                    }
                 });
                 this.websocket.on('error', error => this.log.silly(`WebSocket error: ${error}`));
                 this.websocket.on('message', msg => {
@@ -142,20 +179,12 @@ export class RunCommandBase extends CommandBase {
                     const msgString = msg?.toString();
                     if (typeof msgString === 'string') {
                         try {
-                            const data = JSON.parse(msgString);
-                            if (!Array.isArray(data) || data.length === 0) {
-                                return;
+                            const message = parseAdminSocketMessage(JSON.parse(msgString));
+                            if (message.type === 'event') {
+                                this.socketEvents.emit(message.name, message.args);
                             }
-                            switch (data[0]) {
-                                case 0:
-                                    if (data.length > 3) {
-                                        this.socketEvents.emit(data[2], data[3]);
-                                    }
-                                    break;
-                                case 1:
-                                    // ping received, send pong (keep-alive)
-                                    this.websocket?.send('[2]');
-                                    break;
+                            else if (message.type === 'ping') {
+                                this.websocket?.send('[2]');
                             }
                         }
                         catch (error) {
@@ -167,6 +196,13 @@ export class RunCommandBase extends CommandBase {
             connectWebSocketClient();
         }
         this.log.box(`Admin is now reachable under http://127.0.0.1:${this.config.adminPort}/`);
+    }
+    sendSocketEvent(name, args, callback = false) {
+        if (this.websocket?.readyState !== WebSocket.OPEN) {
+            return;
+        }
+        this.websocketMessageId = (this.websocketMessageId % 0xfffffffe) + 1;
+        this.websocket.send(createAdminSocketMessage(this.websocketMessageId, name, args, callback));
     }
     /**
      * Detect adapter UI capabilities by reading io-package.json adminUI configuration
@@ -446,6 +482,7 @@ export class RunCommandBase extends CommandBase {
     startBrowserSync(port, hasReact) {
         this.log.notice('Starting browser-sync');
         const bs = browserSync.create();
+        this.browserSyncInstances.push(bs);
         const adminPath = path.resolve(this.rootPath, 'admin/');
         const config = {
             server: { baseDir: adminPath, directory: true },
@@ -456,14 +493,6 @@ export class RunCommandBase extends CommandBase {
             reloadDelay: hasReact ? 500 : 0,
             reloadDebounce: hasReact ? 500 : 0,
             files: [path.join(adminPath, '**')],
-            plugins: [
-                {
-                    module: 'bs-html-injector',
-                    options: {
-                        files: [path.join(adminPath, '*.html')],
-                    },
-                },
-            ],
         };
         // console.log(config);
         bs.init(config);
@@ -481,21 +510,14 @@ export class RunCommandBase extends CommandBase {
             if (e === 'change') {
                 this.log.info(`Detected change in ${fileName}, uploading to ioBroker...`);
                 const content = await readFile(filePath);
-                this.websocket?.send(JSON.stringify([
-                    3,
-                    46,
-                    'writeFile',
-                    [`${this.adapterName}.admin`, fileName, Buffer.from(content).toString('base64')],
-                ]));
+                this.sendSocketEvent('writeFile', [`${this.adapterName}.admin`, fileName, Buffer.from(content).toString('base64')], true);
             }
         });
     }
     async startReact(scriptName) {
         this.log.notice('Starting React build');
         this.log.debug('Waiting for first successful React build...');
-        await this.rootDir.spawnAndAwaitOutput('npm', ['run', scriptName], /(built in|done in|watching (files )?for)/i, {
-            shell: true,
-        });
+        await this.rootDir.spawnNpmAndAwaitOutput(['run', scriptName], /(built in|done in|watching (files )?for)/i);
     }
     /**
      * Patch an existing sourcemap file.
