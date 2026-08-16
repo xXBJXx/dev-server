@@ -149,13 +149,26 @@ export class DevServer {
                         description:
                             'Do not watch the given files or directories for changes (provide paths relative to the adapter base directory.',
                     },
+                    watchPath: {
+                        type: 'string',
+                        array: true,
+                        description:
+                            'Watch an additional local directory for adapter restarts (repeatable; paths are relative to the adapter root)',
+                    },
                     noBrowserSync: {
                         type: 'boolean',
                         alias: 'b',
                         description: 'Disable built-in browser live reload (serve static files instead)',
                     },
                 },
-                async args => await this.watch(!args.noStart, !!args.noInstall, args.doNotWatch, !args.noBrowserSync),
+                async args =>
+                    await this.watch(
+                        !args.noStart,
+                        !!args.noInstall,
+                        args.doNotWatch,
+                        !args.noBrowserSync,
+                        args.watchPath,
+                    ),
             )
             .command(
                 ['debug [profile]', 'd'],
@@ -407,6 +420,7 @@ export class DevServer {
         noInstall: boolean,
         doNotWatch: string | string[] | undefined,
         useBrowserSync = true,
+        watchPath: string | string[] | undefined = undefined,
     ): Promise<void> {
         let doNotWatchArr: string[] = [];
         if (typeof doNotWatch === 'string') {
@@ -415,13 +429,15 @@ export class DevServer {
             doNotWatchArr = doNotWatch;
         }
 
+        const watchPaths = typeof watchPath === 'string' ? [watchPath] : Array.isArray(watchPath) ? watchPath : [];
+
         this.checkSetup();
 
         let watch: Watch;
         if (this.config?.remote) {
-            watch = new WatchRemote(this, startAdapter, noInstall, doNotWatchArr, useBrowserSync);
+            watch = new WatchRemote(this, startAdapter, noInstall, doNotWatchArr, useBrowserSync, watchPaths);
         } else {
-            watch = new Watch(this, startAdapter, noInstall, doNotWatchArr, useBrowserSync);
+            watch = new Watch(this, startAdapter, noInstall, doNotWatchArr, useBrowserSync, watchPaths);
         }
         await watch.run();
     }

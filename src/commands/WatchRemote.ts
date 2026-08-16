@@ -8,6 +8,9 @@ export class WatchRemote extends Watch {
         if (!this.startAdapter) {
             throw new Error('Cannot watch remote adapter without starting it');
         }
+        if (this.additionalWatchPaths.length) {
+            throw new Error('Additional local watch paths are not supported with remote profiles');
+        }
 
         await super.prepare();
         if (this.profileDir instanceof RemoteConnection) {

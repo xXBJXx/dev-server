@@ -2,7 +2,7 @@ import { DBConnection } from '@iobroker/testing/build/tests/integration/lib/dbCo
 import chokidar from 'chokidar';
 import fg from 'fast-glob';
 import { existsSync } from 'node:fs';
-import { readdir, rm, stat } from 'node:fs/promises';
+import { readFile, readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import nodemon from 'nodemon';
 import { ADAPTER_DEBUGGER_PORT, RunCommandBase } from './RunCommandBase.js';
@@ -16,18 +16,20 @@ export class Watch extends RunCommandBase {
     noInstall;
     doNotWatch;
     useBrowserSync;
+    additionalWatchPaths;
     fileWatchers = [];
     fileChangeBatchers = [];
     nodemonStarted = false;
     nodemonChildPids = new Set();
     restartTimer;
     ignoreConfigChangesUntil = 0;
-    constructor(owner, startAdapter, noInstall, doNotWatch, useBrowserSync) {
+    constructor(owner, startAdapter, noInstall, doNotWatch, useBrowserSync, additionalWatchPaths = []) {
         super(owner);
         this.startAdapter = startAdapter;
         this.noInstall = noInstall;
         this.doNotWatch = doNotWatch;
         this.useBrowserSync = useBrowserSync;
+        this.additionalWatchPaths = additionalWatchPaths;
     }
     getStartupPorts() {
         const ports = super.getStartupPorts();
@@ -154,6 +156,7 @@ export class Watch extends RunCommandBase {
             await this.startFileSync(adapterRunDir, mainFileSuffix);
             this.log.notice('File synchronization ready');
         }
+        await this.startWwwSync();
         if (this.startAdapter) {
             await delay(3000);
             await this.startNodemon(adapterRunDir, pkg.main);
@@ -275,6 +278,48 @@ export class Watch extends RunCommandBase {
                 changeBatcher.enqueue(filename, 'unlink');
             });
         });
+    }
+    async startWwwSync() {
+        const wwwPath = path.join(this.rootPath, 'www');
+        if (!existsSync(wwwPath)) {
+            return;
+        }
+        this.log.notice('Starting www file-storage synchronization');
+        const watcher = chokidar.watch('.', {
+            cwd: wwwPath,
+            ignored: watchedPath => watchedPath
+                .split(/[\\/]/)
+                .some(part => part === 'node_modules' || (part !== '.' && part.startsWith('.'))),
+            awaitWriteFinish: { stabilityThreshold: 100, pollInterval: 25 },
+        });
+        this.fileWatchers.push(watcher);
+        const batcher = new FileChangeBatcher(async (changes) => {
+            for (const change of changes) {
+                const storagePath = change.filename.replace(/\\/g, '/');
+                if (change.type === 'unlink') {
+                    this.sendSocketEvent('unlink', [this.adapterName, storagePath], true);
+                    continue;
+                }
+                try {
+                    const content = await readFile(path.join(wwwPath, change.filename));
+                    this.sendSocketEvent('writeFile', [this.adapterName, storagePath, Buffer.from(content).toString('base64')], true);
+                }
+                catch (error) {
+                    if (error?.code !== 'ENOENT') {
+                        this.log.warn(`Couldn't synchronize www/${storagePath}: ${error}`);
+                    }
+                }
+            }
+        });
+        this.fileChangeBatchers.push(batcher);
+        await new Promise((resolve, reject) => {
+            watcher.on('error', reject);
+            watcher.on('add', filename => batcher.enqueue(filename, 'upsert'));
+            watcher.on('change', filename => batcher.enqueue(filename, 'upsert'));
+            watcher.on('unlink', filename => batcher.enqueue(filename, 'unlink'));
+            watcher.on('ready', () => void batcher.flush().then(resolve, reject));
+        });
+        this.log.notice('www file-storage synchronization ready');
     }
     startNodemon(baseDir, scriptName) {
         const fullBaseDir = path.resolve(this.profilePath, baseDir);
@@ -411,7 +456,7 @@ export class Watch extends RunCommandBase {
             verbose: true,
             // dump: true, // this will output the entire config and not do anything
             colours: false,
-            watch: [fullBaseDir],
+            watch: [fullBaseDir, ...this.additionalWatchPaths.map(watchPath => path.resolve(this.rootPath, watchPath))],
             ignore: ignoreList,
             ignoreRoot: [],
             delay: 2000,

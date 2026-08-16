@@ -24,6 +24,7 @@ export class RunCommandBase extends CommandBase {
     websocket;
     websocketReconnectTimer;
     websocketMessageId = 0;
+    pendingSocketEvents = [];
     webServer;
     liveReloadServers = [];
     isExiting = false;
@@ -192,6 +193,7 @@ export class RunCommandBase extends CommandBase {
                 this.websocket.on('open', () => {
                     this.log.silly('WebSocket open');
                     this.sendSocketEvent('subscribeObjects', [`system.adapter.${this.adapterName}.0`]);
+                    this.flushPendingSocketEvents();
                 });
                 this.websocket.on('close', () => {
                     this.log.silly('WebSocket closed');
@@ -226,10 +228,36 @@ export class RunCommandBase extends CommandBase {
     }
     sendSocketEvent(name, args, callback = false) {
         if (this.websocket?.readyState !== WebSocket.OPEN) {
+            this.queueSocketEvent(name, args, callback);
             return;
         }
         this.websocketMessageId = (this.websocketMessageId % 0xfffffffe) + 1;
         this.websocket.send(createAdminSocketMessage(this.websocketMessageId, name, args, callback));
+    }
+    queueSocketEvent(name, args, callback) {
+        if ((name === 'writeFile' || name === 'unlink') && args.length >= 2) {
+            const existingIndex = this.pendingSocketEvents.findIndex(event => (event.name === 'writeFile' || event.name === 'unlink') &&
+                event.args[0] === args[0] &&
+                event.args[1] === args[1]);
+            if (existingIndex !== -1) {
+                this.pendingSocketEvents.splice(existingIndex, 1);
+            }
+        }
+        this.pendingSocketEvents.push({ name, args, callback });
+        if (this.pendingSocketEvents.length > 1000) {
+            this.pendingSocketEvents.shift();
+            this.log.warn('Socket event queue is full; discarded the oldest pending event.');
+        }
+    }
+    flushPendingSocketEvents() {
+        if (this.websocket?.readyState !== WebSocket.OPEN || !this.pendingSocketEvents.length) {
+            return;
+        }
+        const events = this.pendingSocketEvents.splice(0);
+        this.log.debug(`Sending ${events.length} queued Admin socket event(s)`);
+        for (const event of events) {
+            this.sendSocketEvent(event.name, event.args, event.callback);
+        }
     }
     /**
      * Detect adapter UI capabilities by reading io-package.json adminUI configuration

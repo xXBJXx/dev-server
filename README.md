@@ -257,6 +257,10 @@ The following options are available:
 
 `--doNotWatch <filepattern>` Provide files and locations relative to adapter base directory that should not be watched for changes. This option can be provided multiple times to ignore several locations.
 
+`--watchPath <directory>` Restart the adapter when files in an additional local directory change. The path is resolved relative to the adapter root and the option can be repeated for workspace or monorepo libraries. This option is only available for local profiles.
+
+If the adapter contains a `www/` directory, watch mode synchronizes its initial contents and subsequent additions, changes and deletions to the ioBroker file store. Rapid build events are combined before upload.
+
 `--no-browser-sync` Disable the built-in browser live reload and serve static files instead. The option name is retained for backwards compatibility.
 
 ### `dev-server debug`

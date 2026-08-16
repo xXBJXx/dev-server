@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -263,6 +263,96 @@ describe('dev-server runtime regressions', () => {
         const debugPorts = new Debug(owner, false, true).getStartupPorts();
         assert.ok(debugPorts.some(definition => definition.port === CONTROLLER_DEBUGGER_PORT));
         assert.ok(debugPorts.some(definition => definition.port === ADAPTER_DEBUGGER_PORT));
+    });
+
+    it('adds workspace library paths to the local nodemon watcher', () => {
+        class WatchConfigTest extends Watch {
+            getConfig(script, baseDir) {
+                return this.createNodemonConfig(script, baseDir);
+            }
+        }
+        const rootPath = path.resolve('adapter-root');
+        const owner = {
+            adapterName: 'example',
+            config: { adminPort: 8081, useSymlinks: false },
+            log: {},
+            profileName: 'default',
+            profilePath: path.resolve('profile'),
+            rootPath,
+        };
+        const watch = new WatchConfigTest(owner, true, true, [], true, ['../shared-library']);
+        const config = watch.getConfig('main.js', path.resolve('installed-adapter'));
+
+        assert.ok(config.watch.includes(path.resolve(rootPath, '../shared-library')));
+    });
+
+    it('synchronizes initial, changed and deleted www files to ioBroker storage', async function () {
+        this.timeout(10_000);
+        class WwwWatchTest extends Watch {
+            events = [];
+
+            sendSocketEvent(name, args, callback) {
+                this.events.push({ name, args, callback });
+            }
+
+            startWww() {
+                return this.startWwwSync();
+            }
+
+            stopWww() {
+                return this.stopRuntime();
+            }
+        }
+
+        const rootPath = await mkdtemp(path.join(tmpdir(), 'dev-server-www-'));
+        const wwwPath = path.join(rootPath, 'www');
+        const filePath = path.join(wwwPath, 'index.html');
+        await mkdir(wwwPath);
+        await writeFile(filePath, 'initial');
+        const owner = {
+            adapterName: 'example',
+            config: { adminPort: 8081, useSymlinks: false },
+            log: { debug: () => undefined, notice: () => undefined, warn: () => undefined },
+            profileName: 'default',
+            profilePath: path.resolve(rootPath, 'profile'),
+            rootPath,
+        };
+        const watch = new WwwWatchTest(owner, false, true, [], false);
+        const waitForEventCount = async expected => {
+            for (let attempt = 0; attempt < 40 && watch.events.length < expected; attempt++) {
+                await new Promise(resolve => setTimeout(resolve, 50));
+            }
+            assert.ok(watch.events.length >= expected, `Expected ${expected} www events, got ${watch.events.length}`);
+        };
+
+        try {
+            await watch.startWww();
+            await waitForEventCount(1);
+            assert.deepStrictEqual(watch.events[0], {
+                name: 'writeFile',
+                args: ['example', 'index.html', Buffer.from('initial').toString('base64')],
+                callback: true,
+            });
+
+            await writeFile(filePath, 'changed');
+            await waitForEventCount(2);
+            assert.deepStrictEqual(watch.events[1].args, [
+                'example',
+                'index.html',
+                Buffer.from('changed').toString('base64'),
+            ]);
+
+            await rm(filePath);
+            await waitForEventCount(3);
+            assert.deepStrictEqual(watch.events[2], {
+                name: 'unlink',
+                args: ['example', 'index.html'],
+                callback: true,
+            });
+        } finally {
+            await watch.stopWww();
+            await rm(rootPath, { recursive: true, force: true });
+        }
     });
 
     it('aborts before starting work when the preflight finds a conflict', async () => {

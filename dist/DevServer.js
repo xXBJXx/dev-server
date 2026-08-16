@@ -97,12 +97,17 @@ export class DevServer {
                 alias: 'w',
                 description: 'Do not watch the given files or directories for changes (provide paths relative to the adapter base directory.',
             },
+            watchPath: {
+                type: 'string',
+                array: true,
+                description: 'Watch an additional local directory for adapter restarts (repeatable; paths are relative to the adapter root)',
+            },
             noBrowserSync: {
                 type: 'boolean',
                 alias: 'b',
                 description: 'Disable built-in browser live reload (serve static files instead)',
             },
-        }, async (args) => await this.watch(!args.noStart, !!args.noInstall, args.doNotWatch, !args.noBrowserSync))
+        }, async (args) => await this.watch(!args.noStart, !!args.noInstall, args.doNotWatch, !args.noBrowserSync, args.watchPath))
             .command(['debug [profile]', 'd'], 'Run ioBroker dev-server and start the adapter from ioBroker in "debug" mode. You may attach a debugger to the running adapter.', {
             wait: {
                 type: 'boolean',
@@ -293,7 +298,7 @@ export class DevServer {
         const run = new Run(this, useBrowserSync);
         await run.run();
     }
-    async watch(startAdapter, noInstall, doNotWatch, useBrowserSync = true) {
+    async watch(startAdapter, noInstall, doNotWatch, useBrowserSync = true, watchPath = undefined) {
         let doNotWatchArr = [];
         if (typeof doNotWatch === 'string') {
             doNotWatchArr.push(doNotWatch);
@@ -301,13 +306,14 @@ export class DevServer {
         else if (Array.isArray(doNotWatch)) {
             doNotWatchArr = doNotWatch;
         }
+        const watchPaths = typeof watchPath === 'string' ? [watchPath] : Array.isArray(watchPath) ? watchPath : [];
         this.checkSetup();
         let watch;
         if (this.config?.remote) {
-            watch = new WatchRemote(this, startAdapter, noInstall, doNotWatchArr, useBrowserSync);
+            watch = new WatchRemote(this, startAdapter, noInstall, doNotWatchArr, useBrowserSync, watchPaths);
         }
         else {
-            watch = new Watch(this, startAdapter, noInstall, doNotWatchArr, useBrowserSync);
+            watch = new Watch(this, startAdapter, noInstall, doNotWatchArr, useBrowserSync, watchPaths);
         }
         await watch.run();
     }
