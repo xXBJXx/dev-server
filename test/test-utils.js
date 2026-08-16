@@ -223,7 +223,6 @@ export async function createTestAdapter(configFile, targetDir) {
             {
                 cwd: targetDir,
                 timeout: 180000, // 3 minutes
-                env: { ...process.env, NODE_TLS_REJECT_UNAUTHORIZED: '0' }, // Handle certificate issues in test environment
             },
         );
         console.log(`Test adapter "${adapterName}" created successfully`);

@@ -7,6 +7,7 @@
 
 ## **WORK IN PROGRESS**
 
+- Keep TLS certificate verification enabled while creating integration-test adapters
 - Reject unknown commands and command options instead of silently ignoring them
 - (@Apollon77/@copilot) **BREAKING:** Require Node.js >=20.19.0 <22.0.0 || >=22.13.0 (was >=16.0.0)
 - (oweitman/Apollon77) Update chokidar and express
