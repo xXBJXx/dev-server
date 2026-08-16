@@ -403,9 +403,9 @@ export class Watch extends RunCommandBase {
             debugPid = await this.waitForNodeChildProcess(childPid);
         }
         catch (error) {
-            // ps-tree may not understand the process-list output of brand-new
-            // Windows/Node.js versions. The inspector port remains stable and
-            // can still be used to attach the debugger.
+            // Process enumeration can be restricted by the operating system.
+            // The inspector port remains stable and can still be used to
+            // attach the debugger.
             this.log.warn(`Couldn't determine nodemon child process: ${error}`);
             this.log.box(`Debugger is now available on 127.0.0.1:${ADAPTER_DEBUGGER_PORT}`);
             return;

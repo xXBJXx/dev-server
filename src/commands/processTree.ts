@@ -68,6 +68,31 @@ export async function terminateProcessTree(pid: number, force = false): Promise<
 }
 
 export async function terminateProcessTreeGracefully(pid: number, timeoutMs = 2000): Promise<void> {
+    // Windows has no signal equivalent that reliably propagates through an npm
+    // or command wrapper. taskkill /T /F is the native, deterministic tree
+    // operation and avoids leaving detached adapter processes behind.
+    if (process.platform === 'win32') {
+        let descendantPids: number[] = [];
+        try {
+            descendantPids = (await getChildProcesses(pid)).map(processInfo => parseInt(processInfo.PID));
+        } catch {
+            // taskkill /T remains the primary tree operation if process
+            // enumeration is unavailable.
+        }
+        await terminateProcessTree(pid, true);
+        for (const childPid of descendantPids.reverse()) {
+            if (isProcessRunning(childPid)) {
+                await terminateProcessTree(childPid, true);
+            }
+        }
+
+        const deadline = Date.now() + timeoutMs;
+        while ([pid, ...descendantPids].some(isProcessRunning) && Date.now() < deadline) {
+            await delay(25);
+        }
+        return;
+    }
+
     await terminateProcessTree(pid, false);
 
     const deadline = Date.now() + timeoutMs;

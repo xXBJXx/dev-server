@@ -28,6 +28,7 @@ import {
     RunCommandBase,
 } from '../dist/commands/RunCommandBase.js';
 import { Watch } from '../dist/commands/Watch.js';
+import { findDescendantProcesses, parseWindowsProcessList } from '../dist/commands/utils.js';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -175,6 +176,21 @@ describe('dev-server runtime regressions', () => {
         assert.deepStrictEqual([...ports.get(8081)], [1234]);
         assert.deepStrictEqual([...ports.get(9229)], [5678]);
         assert.equal(ports.has(50000), false);
+    });
+
+    it('parses modern Windows process data and finds complete descendant trees', () => {
+        const processes = parseWindowsProcessList(
+            JSON.stringify([
+                { ProcessId: 100, ParentProcessId: 1, Name: 'npm.exe' },
+                { ProcessId: 300, ParentProcessId: 200, Name: 'node.exe' },
+                { ProcessId: 200, ParentProcessId: 100, Name: 'cmd.exe' },
+                { ProcessId: 400, ParentProcessId: 1, Name: 'unrelated.exe' },
+            ]),
+        );
+        assert.deepStrictEqual(
+            findDescendantProcesses(processes, 100).map(processInfo => Number(processInfo.PID)),
+            [200, 300],
+        );
     });
 
     it('detects a listening startup port before launching child processes', async () => {
