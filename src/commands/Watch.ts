@@ -110,7 +110,11 @@ export class Watch extends RunCommandBase {
                     this.log.debug(`Synchronizing ${filename}`);
                     const src = inSrc(filename);
                     const dest = inDest(filename);
-                    if (filename.endsWith('.map')) {
+                    if (filename.endsWith('.ts')) {
+                        // TypeScript loaders create their own sourcemaps. Appending a sourceMappingURL to
+                        // the source file itself is invalid and makes esbuild-register emit a warning.
+                        await this.profileDir.copyFileTo(src, dest);
+                    } else if (filename.endsWith('.map')) {
                         await this.patchSourcemap(src, dest);
                     } else if (!existsSync(inSrc(`${filename}.map`))) {
                         // copy file and add sourcemap

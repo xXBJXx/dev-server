@@ -7,6 +7,7 @@
 
 ## **WORK IN PROGRESS**
 
+- Let TypeScript loaders manage source maps without appending invalid source-map comments
 - Clean up complete integration-test process trees on Windows
 - Align the documented Node.js requirement with the package engines
 - Run npm and npx integration-test commands on Windows without relying on shell execution

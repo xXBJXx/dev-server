@@ -143,6 +143,7 @@ describe('dev-server integration tests - Pure TypeScript', function () {
                 output.includes('starting. Version 0.0.1'),
                 'esbuild-register should successfully transpile and execute TypeScript files',
             );
+            assert.doesNotMatch(output, /Unsupported source map comment/);
         });
 
         it('should restart adapter when TypeScript source file changes', async () => {
@@ -169,6 +170,7 @@ describe('dev-server integration tests - Pure TypeScript', function () {
                 output.includes('starting. Version 0.0.1'),
                 'esbuild-register should successfully transpile and execute TypeScript files after restart',
             );
+            assert.doesNotMatch(output, /Unsupported source map comment/);
         });
     });
 });
