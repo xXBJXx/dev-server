@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -30,6 +31,7 @@ import {
 } from '../dist/commands/RunCommandBase.js';
 import { Watch } from '../dist/commands/Watch.js';
 import { findDescendantProcesses, parseWindowsProcessList } from '../dist/commands/utils.js';
+import { RemoteConnection } from '../dist/commands/RemoteConnection.js';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -213,6 +215,58 @@ describe('dev-server runtime regressions', () => {
             findDescendantProcesses(processes, 100).map(processInfo => Number(processInfo.PID)),
             [200, 300],
         );
+    });
+
+    it('shares concurrent SSH connects and reconnects after an unexpected close', async () => {
+        class FakeSshClient extends EventEmitter {
+            connectCalls = 0;
+            endCalls = 0;
+
+            connect() {
+                this.connectCalls++;
+                queueMicrotask(() => this.emit('ready'));
+            }
+
+            end() {
+                this.endCalls++;
+                this.emit('close');
+            }
+        }
+
+        const clients = [];
+        const warnings = [];
+        const signalListenersBefore = process.listenerCount('SIGINT');
+        const remote = new RemoteConnection(
+            { id: 'test', host: 'example.invalid', port: 22, user: 'tester' },
+            {
+                debug: () => undefined,
+                error: () => undefined,
+                notice: () => undefined,
+                silly: () => undefined,
+                warn: message => warnings.push(message),
+            },
+            () => {
+                const client = new FakeSshClient();
+                clients.push(client);
+                return client;
+            },
+        );
+        try {
+            await Promise.all([remote.connect(), remote.connect()]);
+            assert.equal(clients.length, 1);
+            assert.equal(clients[0].connectCalls, 1);
+            assert.equal(process.listenerCount('SIGINT'), signalListenersBefore + 1);
+
+            clients[0].emit('close');
+            assert.match(warnings.at(-1), /reconnect automatically/i);
+            await remote.connect();
+            assert.equal(clients.length, 2);
+            assert.equal(process.listenerCount('SIGINT'), signalListenersBefore + 1);
+        } finally {
+            remote.close();
+        }
+        assert.equal(process.listenerCount('SIGINT'), signalListenersBefore);
+        assert.equal(clients[1].endCalls, 1);
     });
 
     it('detects a listening startup port before launching child processes', async () => {

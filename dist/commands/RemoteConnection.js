@@ -8,31 +8,59 @@ import { delay } from './utils.js';
 export class RemoteConnection {
     config;
     log;
-    client = new SSHClient();
+    clientFactory;
+    client;
     connectState = 'disconnected';
+    connectPromise;
+    intentionalClose = false;
     childProcesses = [];
     tunnelServers = [];
+    tunnelSockets = new Set();
     connectSftp;
     homeDir;
-    constructor(config, log) {
+    signalHandler;
+    constructor(config, log, clientFactory = () => new SSHClient()) {
         this.config = config;
         this.log = log;
+        this.clientFactory = clientFactory;
     }
     async connect() {
-        if (this.connectState !== 'disconnected') {
+        if (this.connectState === 'connected') {
             return;
         }
+        if (this.connectPromise) {
+            return this.connectPromise;
+        }
         this.log.notice(`Connecting to ${this.config.user}@${this.config.host}...`);
+        this.intentionalClose = false;
         this.connectState = 'connecting';
-        await new Promise((resolve, reject) => {
-            this.client.once('ready', () => {
+        const client = this.clientFactory();
+        this.client = client;
+        const attempt = new Promise((resolve, reject) => {
+            const fail = (error) => {
+                if (this.client === client) {
+                    this.connectState = 'disconnected';
+                    this.connectSftp = undefined;
+                    this.client = undefined;
+                }
+                reject(error);
+            };
+            client.once('ready', () => {
+                if (this.client !== client) {
+                    return;
+                }
                 this.connectState = 'connected';
                 resolve();
             });
-            this.client.once('error', err => {
+            client.once('error', err => {
                 this.log.error(`SSH connection error: ${err.message}`);
-                this.connectState = 'disconnected';
-                reject(err);
+                fail(err);
+            });
+            client.once('close', () => {
+                this.handleDisconnect(client);
+                if (this.connectState !== 'connected') {
+                    fail(new Error('SSH connection closed before it became ready'));
+                }
             });
             const connectConfig = {
                 host: this.config.host,
@@ -44,7 +72,7 @@ export class RemoteConnection {
             }
             else {
                 connectConfig.tryKeyboard = true;
-                this.client.on('keyboard-interactive', (name, instructions, instructionsLang, prompts, finish) => {
+                client.on('keyboard-interactive', (name, instructions, instructionsLang, prompts, finish) => {
                     this.log.notice(instructions);
                     async function askPassword() {
                         const result = [];
@@ -63,23 +91,49 @@ export class RemoteConnection {
                         .catch(err => this.log.error(`Error getting password: ${err}`));
                 });
             }
-            this.client.connect(connectConfig);
+            client.connect(connectConfig);
         });
+        this.connectPromise = attempt;
+        try {
+            await attempt;
+        }
+        finally {
+            if (this.connectPromise === attempt) {
+                this.connectPromise = undefined;
+            }
+        }
+        if (this.client !== client || !this.isConnected()) {
+            throw new Error('SSH connection closed immediately after authentication');
+        }
         this.log.debug('Remote SSH connection established');
-        process.on('SIGINT', () => void this.exitChildProcesses('SIGINT').catch(e => this.log.silly(`Couldn't exit child processes: ${e.message}`)));
+        if (!this.signalHandler) {
+            this.signalHandler = () => void this.exitChildProcesses('SIGINT').catch(e => this.log.silly(`Couldn't exit child processes: ${e.message}`));
+            process.on('SIGINT', this.signalHandler);
+        }
     }
     close() {
-        if (this.connectState !== 'connected') {
-            return;
-        }
+        this.intentionalClose = true;
         this.log.debug('Closing tunnels...');
         for (const server of this.tunnelServers) {
             server.close();
         }
         this.tunnelServers.length = 0;
+        for (const socket of this.tunnelSockets) {
+            socket.destroy();
+        }
+        this.tunnelSockets.clear();
         this.log.debug('Closing remote SSH connection');
         this.connectState = 'disconnected';
-        this.client.end();
+        this.connectPromise = undefined;
+        this.connectSftp = undefined;
+        this.homeDir = undefined;
+        const client = this.client;
+        this.client = undefined;
+        client?.end();
+        if (this.signalHandler) {
+            process.off('SIGINT', this.signalHandler);
+            this.signalHandler = undefined;
+        }
     }
     async readFile(relPath) {
         const remotePath = await this.getFullRemotePath(relPath);
@@ -114,12 +168,13 @@ export class RemoteConnection {
         await sftp.unlink(remotePath);
     }
     async spawn(command, args, onExit) {
+        const client = await this.getClient();
         const basePath = this.getBasePath();
         const fullCommand = `${command} ${args.map(a => `"${a}"`).join(' ')}`;
         this.log.debug(`${this.config.user}@${this.config.host}:${basePath}> ${fullCommand}`);
         command = this.asBashCommand(`cd ${basePath} ; echo "PID=>$$<" ; exec ${fullCommand}`);
         return new Promise((resolve, reject) => {
-            this.client.exec(command, { pty: true }, (err, stream) => {
+            client.exec(command, { pty: true }, (err, stream) => {
                 if (err) {
                     return reject(err);
                 }
@@ -141,11 +196,12 @@ export class RemoteConnection {
         });
     }
     async exec(command) {
+        const client = await this.getClient();
         const basePath = this.getBasePath();
         this.log.debug(`${this.config.user}@${this.config.host}:${basePath}> ${command}`);
         command = this.asBashCommand(`cd ${basePath} ; ${command}`);
         return new Promise((resolve, reject) => {
-            this.client.exec(command, { pty: true }, (err, stream) => {
+            client.exec(command, { pty: true }, (err, stream) => {
                 if (err) {
                     return reject(err);
                 }
@@ -176,10 +232,11 @@ export class RemoteConnection {
         await this.exec(`rm -f "${remotePath}"`);
     }
     async getExecOutput(command) {
+        const client = await this.getClient();
         this.log.debug(`${this.config.user}@${this.config.host}> ${command}`);
         command = this.asBashCommand(command);
         const result = await ssh2ExecAsync({
-            ssh: this.client,
+            ssh: client,
             command,
             end: false,
         });
@@ -217,9 +274,12 @@ export class RemoteConnection {
     async tunnelPort(port) {
         this.log.notice(`Preparing tunnel for port ${port}...`);
         const server = createServer(sock => {
+            this.tunnelSockets.add(sock);
+            sock.once('close', () => this.tunnelSockets.delete(sock));
             sock.pause();
             this.log.silly(`Client connected to port ${port}, opening tunnel...`);
-            this.client.forwardOut('127.0.0.1', port, '127.0.0.1', port, (err, stream) => {
+            void this.getClient()
+                .then(client => client.forwardOut('127.0.0.1', port, '127.0.0.1', port, (err, stream) => {
                 if (err) {
                     this.log.silly(`forwardOut for port ${port} failed: ${err.message}`);
                     sock.destroy();
@@ -229,6 +289,10 @@ export class RemoteConnection {
                 sock.pipe(stream);
                 stream.pipe(sock);
                 sock.resume();
+            }))
+                .catch(error => {
+                this.log.silly(`Could not reconnect tunnel for port ${port}: ${error}`);
+                sock.destroy();
             });
         });
         this.tunnelServers.push(server);
@@ -256,18 +320,46 @@ export class RemoteConnection {
     getBasePath(home = '~') {
         return `${home}/.dev-server/${this.config.id}`;
     }
-    getSftp() {
+    async getSftp() {
+        const client = await this.getClient();
         if (!this.connectSftp) {
-            this.connectSftp = new Promise((resolve, reject) => {
-                this.client.sftp((err, sftp) => {
+            const connection = new Promise((resolve, reject) => {
+                client.sftp((err, sftp) => {
                     if (err) {
                         return reject(err);
                     }
                     resolve(new SftpConnection(sftp, this.log));
                 });
             });
+            this.connectSftp = connection;
+            void connection.catch(() => {
+                if (this.connectSftp === connection) {
+                    this.connectSftp = undefined;
+                }
+            });
         }
         return this.connectSftp;
+    }
+    async getClient() {
+        await this.connect();
+        if (!this.client || this.connectState !== 'connected') {
+            throw new Error('SSH client is not connected');
+        }
+        return this.client;
+    }
+    isConnected() {
+        return this.connectState === 'connected';
+    }
+    handleDisconnect(client) {
+        if (this.client !== client) {
+            return;
+        }
+        this.connectState = 'disconnected';
+        this.connectSftp = undefined;
+        this.client = undefined;
+        if (!this.intentionalClose) {
+            this.log.warn('Remote SSH connection closed; the next operation will reconnect automatically.');
+        }
     }
     async getHomeDir() {
         if (!this.homeDir) {
@@ -351,7 +443,7 @@ class SftpConnection {
         });
     }
     async run(executor) {
-        await this.currentOperation;
+        await this.currentOperation?.catch(() => undefined);
         const operation = new Promise(executor);
         this.currentOperation = operation;
         return operation;
