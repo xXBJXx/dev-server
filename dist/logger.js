@@ -19,7 +19,9 @@ export class Logger {
         console.log(message);
     }
     debug(message) {
-        console.log(chalk.grey(message));
+        if (this.level === 'debug' || this.level === 'silly') {
+            console.log(chalk.grey(message));
+        }
     }
     silly(message) {
         if (this.level === 'silly') {

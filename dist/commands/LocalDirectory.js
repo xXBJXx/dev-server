@@ -2,7 +2,8 @@ import * as cp from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { copyFile, readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { delay, getChildProcesses, readJson, writeJson } from './utils.js';
+import { terminateProcessTree, terminateProcessTreeGracefully } from './processTree.js';
+import { readJson, writeJson } from './utils.js';
 export class LocalDirectory {
     directory;
     log;
@@ -142,28 +143,17 @@ export class LocalDirectory {
     }
     async exitChildProcesses(signal = 'SIGINT') {
         const childPids = this.childProcesses.map(p => p.pid).filter(p => !!p);
-        const tryKill = (pid, signal) => {
-            try {
-                process.kill(pid, signal);
-            }
-            catch {
-                // ignore
-            }
-        };
+        const uniquePids = [...new Set(childPids)];
         try {
-            const children = await Promise.all(childPids.map(pid => getChildProcesses(pid)));
-            children.forEach(ch => ch.forEach(c => tryKill(parseInt(c.PID), signal)));
+            if (signal === 'SIGKILL') {
+                await Promise.all(uniquePids.map(pid => terminateProcessTree(pid, true)));
+            }
+            else {
+                await Promise.all(uniquePids.map(pid => terminateProcessTreeGracefully(pid)));
+            }
         }
         catch (error) {
-            this.log.error(`Couldn't kill grand-child processes: ${error}`);
-        }
-        if (childPids.length) {
-            childPids.forEach(pid => tryKill(pid, signal));
-            if (signal !== 'SIGKILL') {
-                // first try SIGINT and give it 5s to exit itself before killing the processes left
-                await delay(5000);
-                return this.exitChildProcesses('SIGKILL');
-            }
+            this.log.error(`Couldn't terminate child process tree: ${error}`);
         }
     }
     sendSigIntToChildProcesses() {

@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'mocha';
@@ -42,5 +44,32 @@ describe('dev-server CLI validation', function () {
 
         assert.notStrictEqual(result.status, 0);
         assert.match(output, /You must specify a command/i);
+    });
+
+    it('offers the doctor command', () => {
+        const result = runCli('--help');
+        const output = `${result.stdout}${result.stderr}`;
+
+        assert.equal(result.status, 0);
+        assert.match(output, /doctor \[profile\]/i);
+    });
+
+    it('prints machine-readable doctor JSON without a log preamble', () => {
+        const adapterDir = mkdtempSync(path.join(tmpdir(), 'dev-server-doctor-'));
+        try {
+            writeFileSync(path.join(adapterDir, 'package.json'), JSON.stringify({ name: 'iobroker.doctor-test' }));
+            writeFileSync(
+                path.join(adapterDir, 'io-package.json'),
+                JSON.stringify({ common: { name: 'doctor-test' } }),
+            );
+
+            const result = runCli('doctor', '--json', '--root', adapterDir);
+            assert.equal(result.status, 0);
+            const output = JSON.parse(result.stdout);
+            assert.equal(output.profile, 'default');
+            assert.ok(output.results.some(entry => entry.check === 'Profile setup' && entry.status === 'error'));
+        } finally {
+            rmSync(adapterDir, { recursive: true, force: true });
+        }
     });
 });

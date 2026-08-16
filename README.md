@@ -247,6 +247,8 @@ You may attach a debugger to the running adapter. Keep in mind that the debugger
 
 If you are using TypeScript, make sure you have the `watch:ts` script defined the same way it is done by [Adapter Creator](https://github.com/ioBroker/create-adapter). There is no need to run `npm run watch:ts` separately, this is automatically done by dev-server.
 
+For React frontends, dev-server supports the legacy root scripts `watch:react` and `watch:parcel`. It also automatically detects nested Vite projects in `src-admin` and `src-tab`. A nested `watch` script is preferred; otherwise a `vite build` script is started with `--watch`.
+
 The following options are available:
 
 `--noStart` Do not start the adapter itself, but only watch for changes and synchronize them between the development and the temporary directory.
@@ -292,6 +294,18 @@ Create an ioBroker backup to the given file.
 ### `dev-server profile`
 
 Lists all available profiles with their meta-data.
+
+### `dev-server doctor [profile]`
+
+Diagnose the development environment without starting ioBroker or the adapter. The command checks the Node.js runtime, adapter metadata, selected profile, required ports, database lock files and detected frontend/TypeScript watchers.
+
+On Windows, occupied ports include the owning process ID when it can be determined.
+
+Use `--json` to produce machine-readable output for scripts and IDE integrations:
+
+```shell
+dev-server doctor --json
+```
 
 ## IDEs
 

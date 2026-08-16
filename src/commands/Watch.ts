@@ -9,12 +9,14 @@ import nodemon from 'nodemon';
 import type { DevServer } from '../DevServer.js';
 import { ADAPTER_DEBUGGER_PORT, RunCommandBase } from './RunCommandBase.js';
 import { OBJECTS_DB_PORT_OFFSET } from './CommandBase.js';
+import { terminateProcessTreeGracefully } from './processTree.js';
 import { RemoteConnection } from './RemoteConnection.js';
 import { checkPort, delay } from './utils.js';
 
 export class Watch extends RunCommandBase {
     private readonly fileWatchers: FSWatcher[] = [];
     private nodemonStarted = false;
+    private readonly nodemonChildPids = new Set<number>();
     private restartTimer?: NodeJS.Timeout;
     private ignoreConfigChangesUntil = 0;
     constructor(
@@ -262,17 +264,12 @@ export class Watch extends RunCommandBase {
         const script = path.resolve(fullBaseDir, scriptName);
         this.log.notice(`Starting nodemon for ${script}`);
 
-        let isExiting = false;
-        process.on('SIGINT', () => {
-            isExiting = true;
-        });
-
         nodemon(this.createNodemonConfig(script, fullBaseDir));
         this.nodemonStarted = true;
 
         nodemon
             .on('log', (msg: { type: 'log' | 'info' | 'status' | 'detail' | 'fail' | 'error'; message: string }) => {
-                if (isExiting) {
+                if (this.exiting) {
                     return;
                 }
 
@@ -381,6 +378,11 @@ export class Watch extends RunCommandBase {
             this.nodemonStarted = false;
             nodemon.removeAllListeners('quit');
             nodemon.emit('quit');
+            await Promise.all([...this.nodemonChildPids].map(pid => terminateProcessTreeGracefully(pid)));
+            this.nodemonChildPids.clear();
+            nodemon.removeAllListeners('log');
+            nodemon.removeAllListeners('crash');
+            nodemon.removeAllListeners('quit');
         }
     }
 
@@ -426,9 +428,12 @@ export class Watch extends RunCommandBase {
             return;
         }
 
+        const childPid = parseInt(match[1]);
+        this.nodemonChildPids.add(childPid);
+
         let debugPid: number | undefined;
         try {
-            debugPid = await this.waitForNodeChildProcess(parseInt(match[1]));
+            debugPid = await this.waitForNodeChildProcess(childPid);
         } catch (error) {
             // ps-tree may not understand the process-list output of brand-new
             // Windows/Node.js versions. The inspector port remains stable and

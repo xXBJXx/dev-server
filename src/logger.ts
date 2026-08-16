@@ -22,7 +22,9 @@ export class Logger implements ioBroker.Logger {
     }
 
     public debug(message: string): void {
-        console.log(chalk.grey(message));
+        if (this.level === 'debug' || this.level === 'silly') {
+            console.log(chalk.grey(message));
+        }
     }
 
     public silly(message: string): void {

@@ -10,6 +10,7 @@ import { gt } from 'semver';
 import yargs from 'yargs/yargs';
 import { Backup } from './commands/Backup.js';
 import { Debug } from './commands/Debug.js';
+import { Doctor } from './commands/Doctor.js';
 import { Run } from './commands/Run.js';
 import { Setup } from './commands/Setup.js';
 import { SetupRemote } from './commands/SetupRemote.js';
@@ -115,6 +116,13 @@ export class DevServer {
         }, async (args) => await this.debug(!!args.wait, !!args.noInstall))
             .command(['upload [profile]', 'ul'], 'Upload the current version of your adapter to the ioBroker dev-server. This is only required if you changed something relevant in your io-package.json', {}, async () => await this.upload())
             .command(['backup <filename> [profile]', 'b'], 'Create an ioBroker backup to the given file.', {}, async (args) => await this.backup(args.filename))
+            .command(['doctor [profile]', 'dr'], 'Diagnose the local adapter, profile, ports, database locks and frontend watchers.', {
+            json: {
+                type: 'boolean',
+                default: false,
+                description: 'Print diagnostics as JSON for scripts and IDE integrations',
+            },
+        }, async (args) => await this.doctor(!!args.json))
             .command(['profile', 'p'], 'List all dev-server profiles that exist in the current directory.', {}, async () => await this.profile())
             .options({
             temp: {
@@ -131,7 +139,7 @@ export class DevServer {
             .recommendCommands()
             .demandCommand(1, 'You must specify a command.')
             .middleware(async (argv) => await this.setLogger(argv))
-            .middleware(async () => await this.checkVersion())
+            .middleware(async (argv) => await this.checkVersion(!!argv.json))
             .middleware(async (argv) => await this.setDirectories(argv))
             .middleware(async () => await this.parseConfig())
             .wrap(Math.min(100, parser.terminalWidth()))
@@ -139,10 +147,13 @@ export class DevServer {
             .help().argv;
     }
     setLogger(argv) {
-        this.log = new Logger(argv.verbose ? 'silly' : 'debug');
+        this.log = new Logger(argv.json ? 'info' : argv.verbose ? 'silly' : 'debug');
         return Promise.resolve();
     }
-    async checkVersion() {
+    async checkVersion(skipInteractiveCheck = false) {
+        if (skipInteractiveCheck) {
+            return;
+        }
         try {
             const { name, version: localVersion } = await this.readMyPackageJson();
             const { data: { version: releaseVersion }, } = await axios.get(`https://registry.npmjs.org/${name}/latest`, { timeout: 1000 });
@@ -327,6 +338,10 @@ export class DevServer {
         table.unshift(['Profile Name', 'Admin URL', 'Remote Host', 'js-controller', 'admin'].map(h => chalk.bold(h)));
         this.log.info(`The following profiles exist in ${this.tempPath}`);
         this.log.table(table.filter(r => !!r));
+    }
+    async doctor(json = false) {
+        const doctor = new Doctor(this);
+        await doctor.run(json);
     }
     ////////////////// Command Helper Methods //////////////////
     async getProfiles() {

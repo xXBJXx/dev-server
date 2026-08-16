@@ -4,7 +4,8 @@ import { copyFile, readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Logger } from '../logger.js';
 import type { IEnvironment } from './IEnvironment.js';
-import { delay, getChildProcesses, readJson, writeJson } from './utils.js';
+import { terminateProcessTree, terminateProcessTreeGracefully } from './processTree.js';
+import { readJson, writeJson } from './utils.js';
 
 export class LocalDirectory implements IEnvironment {
     protected readonly childProcesses: cp.ChildProcess[] = [];
@@ -177,26 +178,16 @@ export class LocalDirectory implements IEnvironment {
 
     public async exitChildProcesses(signal = 'SIGINT'): Promise<void> {
         const childPids = this.childProcesses.map(p => p.pid).filter(p => !!p) as number[];
-        const tryKill = (pid: number, signal: string): void => {
-            try {
-                process.kill(pid, signal);
-            } catch {
-                // ignore
-            }
-        };
+        const uniquePids = [...new Set(childPids)];
+
         try {
-            const children = await Promise.all(childPids.map(pid => getChildProcesses(pid)));
-            children.forEach(ch => ch.forEach(c => tryKill(parseInt(c.PID), signal)));
-        } catch (error) {
-            this.log.error(`Couldn't kill grand-child processes: ${error as Error}`);
-        }
-        if (childPids.length) {
-            childPids.forEach(pid => tryKill(pid, signal));
-            if (signal !== 'SIGKILL') {
-                // first try SIGINT and give it 5s to exit itself before killing the processes left
-                await delay(5000);
-                return this.exitChildProcesses('SIGKILL');
+            if (signal === 'SIGKILL') {
+                await Promise.all(uniquePids.map(pid => terminateProcessTree(pid, true)));
+            } else {
+                await Promise.all(uniquePids.map(pid => terminateProcessTreeGracefully(pid)));
             }
+        } catch (error) {
+            this.log.error(`Couldn't terminate child process tree: ${error as Error}`);
         }
     }
 
