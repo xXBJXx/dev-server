@@ -169,10 +169,10 @@ export class RunCommandBase extends CommandBase {
         this.log.box(`Admin is now reachable under http://127.0.0.1:${this.config.adminPort}/`);
     }
     /**
-     * Detect adapter UI capabilities by reading io-package.json adminUi configuration
+     * Detect adapter UI capabilities by reading io-package.json adminUI configuration
      *
      * This method determines how the adapter's configuration and tab UI should be handled
-     * by checking the adminUi field in io-package.json, which is the official ioBroker schema.
+     * by checking the adminUI field in io-package.json, which is the official ioBroker schema.
      * It also checks for the presence of jsonConfig files to support legacy adapters.
      *
      * The detection logic replicates what the admin interface does to ensure dev-server
@@ -190,12 +190,12 @@ export class RunCommandBase extends CommandBase {
             configType = 'json';
         }
         if (!this.isJSController()) {
-            // Check io-package.json adminUi field (replicate what admin does)
+            // Check io-package.json adminUI field (replicate what admin does)
             try {
                 const ioPackage = await this.readIoPackageJson();
-                if (ioPackage?.common?.adminUi) {
-                    const adminUi = ioPackage.common.adminUi;
-                    this.log.debug(`Found adminUi configuration in io-package.json: ${JSON.stringify(adminUi)}`);
+                if (ioPackage?.common?.adminUI) {
+                    const adminUi = ioPackage.common.adminUI;
+                    this.log.debug(`Found adminUI configuration in io-package.json: ${JSON.stringify(adminUi)}`);
                     // Set config type based on adminUi.config
                     if (adminUi.config === 'json') {
                         configType = 'json';
@@ -213,7 +213,7 @@ export class RunCommandBase extends CommandBase {
                 }
             }
             catch (error) {
-                this.log.debug(`Failed to read io-package.json adminUi: ${error}`);
+                this.log.debug(`Failed to read io-package.json adminUI: ${error}`);
             }
         }
         this.log.debug(`UI capabilities: configType=${configType}, tabType=${tabType}`);
