@@ -16,6 +16,7 @@ import {
 } from '../dist/commands/CommandBase.js';
 import { Debug } from '../dist/commands/Debug.js';
 import { getNestedFrontendWatchCommand } from '../dist/commands/frontendWatch.js';
+import { FileChangeBatcher } from '../dist/commands/FileChangeBatcher.js';
 import { injectLiveReloadClient, LiveReloadServer } from '../dist/commands/LiveReloadServer.js';
 import { injectCode } from '../dist/jsonConfig.js';
 import { Doctor, parseWindowsListeningPorts } from '../dist/commands/Doctor.js';
@@ -105,6 +106,27 @@ describe('dev-server runtime regressions', () => {
 
     it('does not turn arbitrary nested builds into persistent watchers', () => {
         assert.equal(getNestedFrontendWatchCommand('src-admin', { scripts: { build: 'webpack' } }), undefined);
+    });
+
+    it('collapses file-system bursts and serializes synchronization batches', async () => {
+        const batches = [];
+        const batcher = new FileChangeBatcher(async changes => {
+            batches.push(changes.map(change => ({ ...change })));
+        }, 10);
+
+        batcher.enqueue('build/main.js', 'upsert');
+        batcher.enqueue('build/main.js', 'upsert');
+        batcher.enqueue('build/main.js.map', 'upsert');
+        batcher.enqueue('build/main.js', 'unlink');
+        await batcher.flush();
+        await batcher.close();
+
+        assert.deepStrictEqual(batches, [
+            [
+                { filename: 'build/main.js', type: 'unlink' },
+                { filename: 'build/main.js.map', type: 'upsert' },
+            ],
+        ]);
     });
 
     it('injects the built-in live-reload client exactly once', () => {

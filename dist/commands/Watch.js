@@ -7,6 +7,7 @@ import path from 'node:path';
 import nodemon from 'nodemon';
 import { ADAPTER_DEBUGGER_PORT, RunCommandBase } from './RunCommandBase.js';
 import { HIDDEN_BROWSER_SYNC_PORT_OFFSET, OBJECTS_DB_PORT_OFFSET } from './CommandBase.js';
+import { FileChangeBatcher } from './FileChangeBatcher.js';
 import { terminateProcessTreeGracefully } from './processTree.js';
 import { RemoteConnection } from './RemoteConnection.js';
 import { checkPort, delay } from './utils.js';
@@ -16,6 +17,7 @@ export class Watch extends RunCommandBase {
     doNotWatch;
     useBrowserSync;
     fileWatchers = [];
+    fileChangeBatchers = [];
     nodemonStarted = false;
     nodemonChildPids = new Set();
     restartTimer;
@@ -219,9 +221,36 @@ export class Watch extends RunCommandBase {
                     this.log.warn(`Couldn't sync ${filename}`);
                 }
             };
+            const unlinkFile = async (filename) => {
+                try {
+                    this.log.debug(`Removing synchronized ${filename}`);
+                    await this.profileDir.unlink(inDest(filename));
+                    const map = inDest(`${filename}.map`);
+                    if (await this.profileDir.exists(map)) {
+                        await this.profileDir.unlink(map);
+                    }
+                }
+                catch (error) {
+                    if (error?.code !== 'ENOENT') {
+                        this.log.warn(`Couldn't remove synchronized ${filename}: ${error}`);
+                    }
+                }
+            };
+            const changeBatcher = new FileChangeBatcher(async (changes) => {
+                this.log.debug(`Processing ${changes.length} synchronized file change(s)`);
+                for (const change of changes) {
+                    if (change.type === 'unlink') {
+                        await unlinkFile(change.filename);
+                    }
+                    else {
+                        await syncFile(change.filename);
+                    }
+                }
+            });
+            this.fileChangeBatchers.push(changeBatcher);
             watcher.on('add', async (filename) => {
                 if (ready) {
-                    await syncFile(filename);
+                    changeBatcher.enqueue(filename, 'upsert');
                 }
                 else if (!filename.endsWith('.map') && !(await this.profileDir.exists(inDest(filename)))) {
                     // ignore files during initial sync if they don't exist in the target directory (except for sourcemaps)
@@ -234,18 +263,16 @@ export class Watch extends RunCommandBase {
             });
             watcher.on('change', (filename) => {
                 if (!ignoreFiles.includes(filename)) {
-                    const resPromise = syncFile(filename);
-                    if (!ready) {
-                        initialEventPromises.push(resPromise);
+                    if (ready) {
+                        changeBatcher.enqueue(filename, 'upsert');
+                    }
+                    else {
+                        initialEventPromises.push(syncFile(filename));
                     }
                 }
             });
-            watcher.on('unlink', async (filename) => {
-                await this.profileDir.unlink(inDest(filename));
-                const map = inDest(`${filename}.map`);
-                if (await this.profileDir.exists(map)) {
-                    await this.profileDir.unlink(map);
-                }
+            watcher.on('unlink', (filename) => {
+                changeBatcher.enqueue(filename, 'unlink');
             });
         });
     }
@@ -348,6 +375,8 @@ export class Watch extends RunCommandBase {
         }
         await Promise.all(this.fileWatchers.map(watcher => watcher.close()));
         this.fileWatchers.length = 0;
+        await Promise.all(this.fileChangeBatchers.map(async (batcher) => await batcher.close()));
+        this.fileChangeBatchers.length = 0;
         if (this.nodemonStarted) {
             this.nodemonStarted = false;
             nodemon.removeAllListeners('quit');
