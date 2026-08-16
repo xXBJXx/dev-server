@@ -126,6 +126,10 @@ export class DevServer {
             root: { type: 'string', alias: 'r', hidden: true, default: '.' },
             verbose: { type: 'boolean', hidden: true, default: false },
         })
+            .strictCommands()
+            .strictOptions()
+            .recommendCommands()
+            .demandCommand(1, 'You must specify a command.')
             .middleware(async (argv) => await this.setLogger(argv))
             .middleware(async () => await this.checkVersion())
             .middleware(async (argv) => await this.setDirectories(argv))

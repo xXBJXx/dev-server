@@ -18,6 +18,7 @@
     },
     "scripts": {
         "test": "mocha test/*.test.mjs --exit",
+        "test:cli": "mocha test/cli.test.mjs --exit",
         "test:js": "mocha test/js-adapters.test.mjs --exit",
         "test:ts": "mocha test/ts-adapters.test.mjs --exit",
         "test:pure-ts": "mocha test/pure-ts-adapters.test.mjs --exit",
